@@ -91,7 +91,9 @@ def _reserve_snapshot_bundle(
             context_file = context_path.open("x", encoding="utf-8", newline="\n")
         except FileExistsError:
             if not automatic:
-                raise FileExistsError(f"snapshot context already exists: {context_path}")
+                raise FileExistsError(
+                    f"snapshot context already exists: {context_path}"
+                )
             index += 1
             continue
 
@@ -219,6 +221,7 @@ def snapshot_conversation(
         include_raw_payload=include_raw_payload,
     )
 
+    raw_payload_created = False
     try:
         canonical_snapshot = _first_class_snapshot(client, conversation)
         if canonical_snapshot is not None:
@@ -251,6 +254,7 @@ def snapshot_conversation(
         context_file.close()
         if raw_payload_path is not None and raw_text is not None:
             with raw_payload_path.open("x", encoding="utf-8", newline="\n") as raw_file:
+                raw_payload_created = True
                 raw_file.write(raw_text)
 
         ref = ConversationRef.from_any(conversation)
@@ -279,9 +283,9 @@ def snapshot_conversation(
         write_artifact_manifest(manifest_path, manifest)
     except Exception:
         context_file.close()
-        for path in (raw_payload_path, context_path):
-            if path is not None:
-                path.unlink(missing_ok=True)
+        if raw_payload_created and raw_payload_path is not None:
+            raw_payload_path.unlink(missing_ok=True)
+        context_path.unlink(missing_ok=True)
         raise
 
     return ConversationSnapshot(

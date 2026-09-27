@@ -54,7 +54,9 @@ def _normalize_export_format(format: str) -> str:
     export_format = EXPORT_FORMAT_ALIASES.get(normalized)
     if export_format is None:
         supported = ", ".join(sorted(set(EXPORT_FORMAT_ALIASES.values())))
-        raise ValueError(f"unsupported export format: {format!r}; supported: {supported}")
+        raise ValueError(
+            f"unsupported export format: {format!r}; supported: {supported}"
+        )
     return export_format
 
 
@@ -66,8 +68,13 @@ def _normalize_export_name(name: str) -> str:
         raise ValueError("export name is required")
     if normalized in {".", ".."}:
         raise ValueError("export name must be a file-name component")
-    if any(character in _SAFE_NAME_FORBIDDEN or ord(character) < 32 for character in normalized):
-        raise ValueError("export name contains characters that are invalid in file names")
+    if any(
+        character in _SAFE_NAME_FORBIDDEN or ord(character) < 32
+        for character in normalized
+    ):
+        raise ValueError(
+            "export name contains characters that are invalid in file names"
+        )
     return normalized
 
 
@@ -109,7 +116,9 @@ def _reserve_export_bundle(
             export_file = export_path.open("x", encoding="utf-8", newline="\n")
         except FileExistsError:
             if not automatic:
-                raise FileExistsError(f"conversation export already exists: {export_path}")
+                raise FileExistsError(
+                    f"conversation export already exists: {export_path}"
+                )
             index += 1
             continue
         if not manifest_path.exists():
@@ -158,7 +167,9 @@ def _format_jsonl(messages: list[ChatMessage]) -> str:
     )
 
 
-def render_conversation_export(messages: list[ChatMessage], *, format: str = "markdown") -> str:
+def render_conversation_export(
+    messages: list[ChatMessage], *, format: str = "markdown"
+) -> str:
     export_format = _normalize_export_format(format)
     if export_format == "markdown":
         return _format_markdown(messages)
