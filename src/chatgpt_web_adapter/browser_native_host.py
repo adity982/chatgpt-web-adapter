@@ -378,6 +378,8 @@ class BrowserNativeBroker:
             "turn",
             "translate_text",
             "gemini_notebook_add_url_source",
+            "gemini_notebook_generate_audio_overview",
+            "gemini_notebook_observe_audio_overview",
             "canonical_read",
             "canonical_read_complete",
             "release_runtime_tab",
@@ -411,6 +413,8 @@ class BrowserNativeBroker:
                 "turn": 120_000,
                 "translate_text": 30_000,
                 "gemini_notebook_add_url_source": 60_000,
+                "gemini_notebook_generate_audio_overview": 60_000,
+                "gemini_notebook_observe_audio_overview": 60_000,
                 "canonical_read": 30_000,
                 "release_runtime_tab": 10_000,
             }[operation]

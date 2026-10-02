@@ -7,6 +7,19 @@ const CWA_GEMINI_NOTEBOOK_ORIGINS = new Set([
 const CWA_GEMINI_NOTEBOOK_ADD_URL_SOURCE_OPERATION =
   "gemini_notebook_add_url_source";
 const CWA_GEMINI_NOTEBOOK_ADD_URL_SOURCE_CAPABILITY_ID = "add_url_source";
+const CWA_GEMINI_NOTEBOOK_AUDIO_OVERVIEW_CAPABILITY_ID =
+  "generate_audio_overview";
+const CWA_GEMINI_NOTEBOOK_GENERATE_AUDIO_OVERVIEW_OPERATION =
+  "gemini_notebook_generate_audio_overview";
+const CWA_GEMINI_NOTEBOOK_OBSERVE_AUDIO_OVERVIEW_OPERATION =
+  "gemini_notebook_observe_audio_overview";
+const CWA_GEMINI_NOTEBOOK_AUDIO_ACCEPTED_EVIDENCE =
+  "PAGE_DOM_BACKGROUND_ARTIFACT_ACCEPTED";
+const CWA_GEMINI_NOTEBOOK_AUDIO_PENDING_EVIDENCE =
+  "PAGE_DOM_BACKGROUND_ARTIFACT_PENDING";
+const CWA_GEMINI_NOTEBOOK_AUDIO_COMPLETION_FINALITY =
+  "PAGE_DOM_DURABLE_BACKGROUND_ARTIFACT_COMPLETION";
+const CWA_GEMINI_NOTEBOOK_AUDIO_OBSERVATION_STABLE_MS = 1000;
 const CWA_GEMINI_NOTEBOOK_FINALITY =
   "PAGE_DOM_DURABLE_SOURCE_ADMISSION";
 const CWA_GEMINI_NOTEBOOK_SOURCE_ROW_STABLE_MS = 1200;
@@ -144,6 +157,639 @@ function _cwaGeminiNotebookSourceRowsExpression() {
       rows
     };
   })()`;
+}
+
+
+
+function _cwaGeminiNotebookAudioArtifactItemsExpression() {
+  return `(() => {
+    const visible = (element) => {
+      if (!(element instanceof Element)) return false;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 &&
+        style.display !== "none" && style.visibility !== "hidden";
+    };
+    const normalize = (value) =>
+      String(value || "").replace(/\\s+/g, " ").trim();
+    const clip = (value, limit = 180) => normalize(value).slice(0, limit);
+    const classText = (element) =>
+      clip(
+        typeof element?.className === "string"
+          ? element.className
+          : element?.getAttribute?.("class") || "",
+        180
+      );
+    const iconTexts = (element) =>
+      Array.from(element?.querySelectorAll?.("mat-icon") || [])
+        .slice(0, 8)
+        .map((icon) => clip(icon.textContent, 48))
+        .filter(Boolean);
+
+    const notebookUrl =
+      location.origin + location.pathname.replace(/\\/$/, "");
+    const studio = document.querySelector("section.studio-panel");
+    const container =
+      studio?.querySelector(".artifact-library-container") || null;
+    const library = container?.querySelector("artifact-library") || null;
+    const rows = [];
+
+    if (library instanceof Element) {
+      for (const row of library.querySelectorAll(".artifact-item-button")) {
+        if (rows.length >= 20) break;
+        if (!visible(row)) continue;
+
+        const labels = row.querySelector("[id^='artifact-labels-']");
+        const labelsId = String(labels?.id || "");
+        const prefix = "artifact-labels-";
+        const observedArtifactRef = labelsId.startsWith(prefix)
+          ? labelsId.slice(prefix.length)
+          : null;
+        const actionButton =
+          row.querySelector("button.artifact-stretched-button") ||
+          row.querySelector("button") ||
+          null;
+        const icons = iconTexts(row);
+        const actionDisabled =
+          actionButton instanceof Element
+            ? Boolean(actionButton.disabled) ||
+              actionButton.getAttribute("aria-disabled") === "true" ||
+              actionButton.classList.contains("mat-mdc-button-disabled")
+            : null;
+        const pendingIcon = icons.includes("progress_activity");
+        let statusCandidate = "UNKNOWN";
+        if (observedArtifactRef && pendingIcon && actionDisabled === true) {
+          statusCandidate = "PENDING_CANDIDATE";
+        } else if (
+          observedArtifactRef &&
+          !pendingIcon &&
+          actionButton instanceof Element &&
+          actionDisabled === false
+        ) {
+          statusCandidate = "NON_PENDING_CANDIDATE";
+        }
+
+        rows.push({
+          observedArtifactRef,
+          rowClassName: classText(row),
+          title: clip(row.querySelector(".artifact-title")?.textContent || ""),
+          details: clip(row.querySelector(".artifact-details")?.textContent || ""),
+          icons,
+          actionButtonFound: actionButton instanceof Element,
+          actionDisabled,
+          statusCandidate
+        });
+      }
+    }
+
+    return {
+      notebookUrl,
+      studioFound: studio instanceof Element && visible(studio),
+      containerFound: container instanceof Element && visible(container),
+      libraryFound: library instanceof Element && visible(library),
+      emptyMarker:
+        container instanceof Element &&
+        container.classList.contains("artifact-library-container-empty"),
+      rows
+    };
+  })()`;
+}
+
+function _cwaGeminiNotebookAudioConfigReadinessExpression() {
+  return `(() => {
+    const visible = (element) => {
+      if (!(element instanceof Element)) return false;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 &&
+        style.display !== "none" && style.visibility !== "hidden";
+    };
+    const dialogs = Array.from(
+      document.querySelectorAll(
+        "mat-dialog-container[role='dialog'],[role='dialog']"
+      )
+    ).filter(visible);
+    if (dialogs.length !== 1) return { ready: false };
+
+    const dialog = dialogs[0];
+    const icons = Array.from(dialog.querySelectorAll("mat-icon")).map(
+      (icon) => String(icon.textContent || "").trim()
+    );
+    if (!icons.includes("audio_magic_eraser")) return { ready: false };
+
+    const actions =
+      dialog.querySelector(".mat-mdc-dialog-actions") ||
+      dialog.querySelector("[class*='dialog-actions']") ||
+      null;
+    if (!(actions instanceof Element)) return { ready: false };
+
+    const actualButtons = Array.from(actions.querySelectorAll("button")).filter(
+      visible
+    );
+    const tonalCandidates = actualButtons.filter(
+      (button) =>
+        button.classList.contains("mat-tonal-button") &&
+        !button.disabled &&
+        button.getAttribute("aria-disabled") !== "true"
+    );
+    return {
+      ready: actualButtons.length === 2 && tonalCandidates.length === 1,
+      actualButtonCount: actualButtons.length,
+      tonalCandidateCount: tonalCandidates.length
+    };
+  })()`;
+}
+
+function _cwaGeminiNotebookClickAudioOverviewExpression() {
+  return `(() => {
+    const visible = (element) => {
+      if (!(element instanceof Element)) return false;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 &&
+        style.display !== "none" && style.visibility !== "hidden";
+    };
+    const studio = document.querySelector("section.studio-panel");
+    if (!(studio instanceof Element) || !visible(studio)) {
+      return { clicked: false, reason: "STUDIO_OWNER_MISSING" };
+    }
+    const candidates = Array.from(
+      studio.querySelectorAll("basic-create-artifact-button")
+    )
+      .map((owner) => {
+        const control =
+          owner.querySelector("[role='button']") ||
+          owner.querySelector("button") ||
+          null;
+        const icons =
+          control instanceof Element
+            ? Array.from(control.querySelectorAll("mat-icon")).map(
+                (icon) => String(icon.textContent || "").trim()
+              )
+            : [];
+        return { control, icons };
+      })
+      .filter(
+        (entry) =>
+          entry.control instanceof Element &&
+          visible(entry.control) &&
+          entry.icons.includes("audio_spark")
+      );
+    if (candidates.length !== 1) {
+      return {
+        clicked: false,
+        reason: "AUDIO_CREATE_CONTROL_IDENTITY_UNRESOLVED",
+        candidateCount: candidates.length
+      };
+    }
+    const control = candidates[0].control;
+    if (
+      control.getAttribute("aria-disabled") === "true" ||
+      ("disabled" in control && Boolean(control.disabled))
+    ) {
+      return { clicked: false, reason: "AUDIO_CREATE_CONTROL_DISABLED" };
+    }
+    control.click();
+    return { clicked: true };
+  })()`;
+}
+
+function _cwaGeminiNotebookClickAudioGenerateNowExpression() {
+  return `(() => {
+    const visible = (element) => {
+      if (!(element instanceof Element)) return false;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 &&
+        style.display !== "none" && style.visibility !== "hidden";
+    };
+    const dialogs = Array.from(
+      document.querySelectorAll(
+        "mat-dialog-container[role='dialog'],[role='dialog']"
+      )
+    ).filter(visible);
+    if (dialogs.length !== 1) {
+      return { clicked: false, reason: "AUDIO_CONFIG_DIALOG_IDENTITY_UNRESOLVED" };
+    }
+    const dialog = dialogs[0];
+    const icons = Array.from(dialog.querySelectorAll("mat-icon")).map(
+      (icon) => String(icon.textContent || "").trim()
+    );
+    if (!icons.includes("audio_magic_eraser")) {
+      return { clicked: false, reason: "AUDIO_CONFIG_DIALOG_OWNER_UNRESOLVED" };
+    }
+    const actions =
+      dialog.querySelector(".mat-mdc-dialog-actions") ||
+      dialog.querySelector("[class*='dialog-actions']") ||
+      null;
+    if (!(actions instanceof Element)) {
+      return { clicked: false, reason: "AUDIO_CONFIG_ACTIONS_MISSING" };
+    }
+    const actualButtons = Array.from(actions.querySelectorAll("button")).filter(
+      visible
+    );
+    const tonalCandidates = actualButtons.filter(
+      (button) =>
+        button.classList.contains("mat-tonal-button") &&
+        !button.disabled &&
+        button.getAttribute("aria-disabled") !== "true"
+    );
+    if (actualButtons.length !== 2 || tonalCandidates.length !== 1) {
+      return {
+        clicked: false,
+        reason: "AUDIO_GENERATE_NOW_IDENTITY_UNRESOLVED",
+        actionButtonCount: actualButtons.length,
+        tonalCandidateCount: tonalCandidates.length
+      };
+    }
+    tonalCandidates[0].click();
+    return { clicked: true };
+  })()`;
+}
+
+async function _cwaGeminiNotebookWaitForAudioConfig(debuggee, deadlineAt) {
+  while (performance.now() < deadlineAt) {
+    const state = await _cwaGeminiNotebookMutationEvaluate(
+      debuggee,
+      _cwaGeminiNotebookAudioConfigReadinessExpression()
+    );
+    if (state?.ready === true) return state;
+    await sleep(100);
+  }
+  throw new Error("GEMINI_NOTEBOOK_AUDIO_CONFIG_TIMEOUT");
+}
+
+async function _cwaGeminiNotebookWaitForStableAudioArtifact(
+  debuggee,
+  notebookUrl,
+  expectedArtifactRef,
+  deadlineAt
+) {
+  let stableSignature = null;
+  let stableSince = null;
+  let lastRows = -1;
+
+  while (performance.now() < deadlineAt) {
+    const state = await _cwaGeminiNotebookMutationEvaluate(
+      debuggee,
+      _cwaGeminiNotebookAudioArtifactItemsExpression()
+    );
+    if (state?.notebookUrl !== notebookUrl) {
+      throw new Error("GEMINI_NOTEBOOK_AUDIO_NOTEBOOK_ROUTE_CHANGED");
+    }
+    if (
+      state?.studioFound !== true ||
+      state?.containerFound !== true ||
+      state?.libraryFound !== true
+    ) {
+      throw new Error("GEMINI_NOTEBOOK_AUDIO_ARTIFACT_LIBRARY_NOT_READY");
+    }
+
+    const rows = Array.isArray(state?.rows) ? state.rows : [];
+    lastRows = rows.length;
+    if (rows.length > 1) {
+      throw new Error(
+        "GEMINI_NOTEBOOK_AUDIO_ARTIFACT_IDENTITY_UNRESOLVED:" +
+          String(rows.length)
+      );
+    }
+    if (rows.length === 0) {
+      stableSignature = null;
+      stableSince = null;
+      await sleep(200);
+      continue;
+    }
+
+    const row = rows[0];
+    if (!row?.observedArtifactRef) {
+      throw new Error("GEMINI_NOTEBOOK_AUDIO_ARTIFACT_REF_UNRESOLVED");
+    }
+    if (
+      expectedArtifactRef &&
+      String(row.observedArtifactRef) !== expectedArtifactRef
+    ) {
+      throw new Error("GEMINI_NOTEBOOK_AUDIO_ARTIFACT_REF_MISMATCH");
+    }
+    if (
+      row.statusCandidate !== "PENDING_CANDIDATE" &&
+      row.statusCandidate !== "NON_PENDING_CANDIDATE"
+    ) {
+      stableSignature = null;
+      stableSince = null;
+      await sleep(200);
+      continue;
+    }
+
+    const signature = JSON.stringify({
+      observedArtifactRef: row.observedArtifactRef,
+      statusCandidate: row.statusCandidate,
+      actionDisabled: row.actionDisabled,
+      icons: row.icons
+    });
+    if (signature !== stableSignature) {
+      stableSignature = signature;
+      stableSince = performance.now();
+    } else if (
+      stableSince !== null &&
+      performance.now() - stableSince >=
+        CWA_GEMINI_NOTEBOOK_AUDIO_OBSERVATION_STABLE_MS
+    ) {
+      return { state, row };
+    }
+    await sleep(200);
+  }
+
+  throw new Error(
+    "GEMINI_NOTEBOOK_AUDIO_ARTIFACT_STABLE_TIMEOUT:rows=" + String(lastRows)
+  );
+}
+
+async function _cwaGeminiNotebookReloadExactNotebookTab(
+  tabId,
+  notebookUrl,
+  timeoutMs
+) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let sawLoading = false;
+    const timer = setTimeout(
+      () => finish(new Error("GEMINI_NOTEBOOK_RELOAD_TIMEOUT")),
+      timeoutMs
+    );
+
+    function cleanup() {
+      clearTimeout(timer);
+      chrome.tabs.onUpdated.removeListener(onUpdated);
+    }
+
+    async function finish(error = null) {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (error) {
+        reject(error);
+        return;
+      }
+      try {
+        const tab = await chrome.tabs.get(tabId);
+        if (
+          _cwaGeminiNotebookCanonicalNotebookUrl(tab?.url || "") !== notebookUrl
+        ) {
+          reject(new Error("GEMINI_NOTEBOOK_RELOAD_ROUTE_MISMATCH"));
+          return;
+        }
+        resolve(tab);
+      } catch (caught) {
+        reject(caught);
+      }
+    }
+
+    function onUpdated(updatedTabId, changeInfo) {
+      if (updatedTabId !== tabId) return;
+      if (changeInfo.status === "loading") {
+        sawLoading = true;
+      } else if (changeInfo.status === "complete" && sawLoading) {
+        void finish();
+      }
+    }
+
+    chrome.tabs.onUpdated.addListener(onUpdated);
+    chrome.tabs.reload(tabId).catch((error) => void finish(error));
+  });
+}
+
+async function _cwaGeminiNotebookGenerateAudioOverview(message) {
+  if (message?.productId !== CWA_GEMINI_NOTEBOOK_PRODUCT_ID) {
+    throw new Error("GEMINI_NOTEBOOK_PRODUCT_ID_MISMATCH");
+  }
+  if (
+    message?.capabilityId !== CWA_GEMINI_NOTEBOOK_AUDIO_OVERVIEW_CAPABILITY_ID
+  ) {
+    throw new Error("GEMINI_NOTEBOOK_CAPABILITY_ID_MISMATCH");
+  }
+
+  const notebookUrl = _cwaGeminiNotebookCanonicalNotebookUrl(
+    message?.notebookUrl
+  );
+  if (!notebookUrl) throw new Error("GEMINI_NOTEBOOK_NOTEBOOK_URL_INVALID");
+
+  const timeoutMs = Math.max(
+    5000,
+    Math.min(Number(message?.timeoutMs) || 60000, 120000)
+  );
+  const startedAt = performance.now();
+  const deadlineAt = startedAt + timeoutMs;
+  const tab = await _cwaGeminiNotebookFindExactOpenTab(notebookUrl);
+  const debuggee = { tabId: tab.id };
+  let attached = false;
+  let generationCommitMayHaveExecuted = false;
+
+  try {
+    await chrome.debugger.attach(debuggee, CDP_PROTOCOL_VERSION);
+    attached = true;
+    await _cwaBaseSendCommand(debuggee, "Runtime.enable");
+
+    const before = await _cwaGeminiNotebookMutationEvaluate(
+      debuggee,
+      _cwaGeminiNotebookAudioArtifactItemsExpression()
+    );
+    const beforeRows = Array.isArray(before?.rows) ? before.rows : [];
+    if (
+      before?.notebookUrl !== notebookUrl ||
+      before?.studioFound !== true ||
+      before?.containerFound !== true ||
+      before?.libraryFound !== true ||
+      before?.emptyMarker !== true ||
+      beforeRows.length !== 0
+    ) {
+      throw new Error("GEMINI_NOTEBOOK_AUDIO_PRESTATE_NOT_EMPTY");
+    }
+
+    const opened = await _cwaGeminiNotebookMutationEvaluate(
+      debuggee,
+      _cwaGeminiNotebookClickAudioOverviewExpression()
+    );
+    if (opened?.clicked !== true) {
+      throw new Error(
+        "GEMINI_NOTEBOOK_AUDIO_CONFIG_OPEN_FAILED:" +
+          String(opened?.reason || "UNKNOWN")
+      );
+    }
+
+    await _cwaGeminiNotebookWaitForAudioConfig(debuggee, deadlineAt);
+
+    generationCommitMayHaveExecuted = true;
+    const committed = await _cwaGeminiNotebookMutationEvaluate(
+      debuggee,
+      _cwaGeminiNotebookClickAudioGenerateNowExpression()
+    );
+    if (committed?.clicked !== true) {
+      throw new Error(
+        "GEMINI_NOTEBOOK_AUDIO_GENERATE_CLICK_FAILED:" +
+          String(committed?.reason || "UNKNOWN")
+      );
+    }
+
+    const accepted = await _cwaGeminiNotebookWaitForStableAudioArtifact(
+      debuggee,
+      notebookUrl,
+      null,
+      deadlineAt
+    );
+    const row = accepted.row;
+    return {
+      productId: CWA_GEMINI_NOTEBOOK_PRODUCT_ID,
+      capabilityId: CWA_GEMINI_NOTEBOOK_AUDIO_OVERVIEW_CAPABILITY_ID,
+      notebookUrl,
+      tabId: tab.id,
+      elapsedMs: Math.round(performance.now() - startedAt),
+      generationCommitMayHaveExecuted: true,
+      generationAcceptedProven: true,
+      observedArtifactRef: String(row.observedArtifactRef),
+      artifactStatus:
+        row.statusCandidate === "PENDING_CANDIDATE"
+          ? "PENDING"
+          : "COMPLETION_CANDIDATE",
+      artifactTitle: String(row.title || ""),
+      artifactDetails: String(row.details || ""),
+      startEvidence: CWA_GEMINI_NOTEBOOK_AUDIO_ACCEPTED_EVIDENCE,
+      canonicalCompletionProven: false,
+      automaticRetry: false
+    };
+  } catch (error) {
+    if (generationCommitMayHaveExecuted) {
+      throw _cwaGeminiNotebookAmbiguousError(error);
+    }
+    throw error;
+  } finally {
+    if (attached) {
+      try {
+        await chrome.debugger.detach(debuggee);
+      } catch {}
+    }
+  }
+}
+
+async function _cwaGeminiNotebookObserveAudioOverview(message) {
+  if (message?.productId !== CWA_GEMINI_NOTEBOOK_PRODUCT_ID) {
+    throw new Error("GEMINI_NOTEBOOK_PRODUCT_ID_MISMATCH");
+  }
+  if (
+    message?.capabilityId !== CWA_GEMINI_NOTEBOOK_AUDIO_OVERVIEW_CAPABILITY_ID
+  ) {
+    throw new Error("GEMINI_NOTEBOOK_CAPABILITY_ID_MISMATCH");
+  }
+
+  const notebookUrl = _cwaGeminiNotebookCanonicalNotebookUrl(
+    message?.notebookUrl
+  );
+  if (!notebookUrl) throw new Error("GEMINI_NOTEBOOK_NOTEBOOK_URL_INVALID");
+
+  const observedArtifactRef =
+    typeof message?.observedArtifactRef === "string" &&
+    /^[A-Za-z0-9_-]{8,200}$/.test(message.observedArtifactRef)
+      ? message.observedArtifactRef
+      : null;
+  if (!observedArtifactRef) {
+    throw new Error("GEMINI_NOTEBOOK_AUDIO_ARTIFACT_REF_INVALID");
+  }
+
+  const timeoutMs = Math.max(
+    5000,
+    Math.min(Number(message?.timeoutMs) || 60000, 120000)
+  );
+  const startedAt = performance.now();
+  const deadlineAt = startedAt + timeoutMs;
+  const tab = await _cwaGeminiNotebookFindExactOpenTab(notebookUrl);
+  const debuggee = { tabId: tab.id };
+  let attached = false;
+
+  try {
+    await chrome.debugger.attach(debuggee, CDP_PROTOCOL_VERSION);
+    attached = true;
+    await _cwaBaseSendCommand(debuggee, "Runtime.enable");
+
+    const beforeReload = await _cwaGeminiNotebookWaitForStableAudioArtifact(
+      debuggee,
+      notebookUrl,
+      observedArtifactRef,
+      deadlineAt
+    );
+    const firstRow = beforeReload.row;
+
+    if (firstRow.statusCandidate === "PENDING_CANDIDATE") {
+      return {
+        productId: CWA_GEMINI_NOTEBOOK_PRODUCT_ID,
+        capabilityId: CWA_GEMINI_NOTEBOOK_AUDIO_OVERVIEW_CAPABILITY_ID,
+        notebookUrl,
+        tabId: tab.id,
+        elapsedMs: Math.round(performance.now() - startedAt),
+        observedArtifactRef,
+        artifactStatus: "PENDING",
+        artifactTitle: String(firstRow.title || ""),
+        artifactDetails: String(firstRow.details || ""),
+        completionProven: false,
+        reloadVerified: false,
+        finalityEvidence: CWA_GEMINI_NOTEBOOK_AUDIO_PENDING_EVIDENCE,
+        canonicalCompletionProven: false,
+        automaticRetry: false,
+        writePerformed: false,
+        navigationPerformed: false
+      };
+    }
+
+    await chrome.debugger.detach(debuggee);
+    attached = false;
+    const reloadBudget = Math.max(
+      3000,
+      Math.min(45000, deadlineAt - performance.now())
+    );
+    await _cwaGeminiNotebookReloadExactNotebookTab(
+      tab.id,
+      notebookUrl,
+      reloadBudget
+    );
+
+    await chrome.debugger.attach(debuggee, CDP_PROTOCOL_VERSION);
+    attached = true;
+    await _cwaBaseSendCommand(debuggee, "Runtime.enable");
+
+    const afterReload = await _cwaGeminiNotebookWaitForStableAudioArtifact(
+      debuggee,
+      notebookUrl,
+      observedArtifactRef,
+      deadlineAt
+    );
+    const durableRow = afterReload.row;
+    if (durableRow.statusCandidate !== "NON_PENDING_CANDIDATE") {
+      throw new Error("GEMINI_NOTEBOOK_AUDIO_DURABLE_COMPLETION_NOT_CONFIRMED");
+    }
+
+    return {
+      productId: CWA_GEMINI_NOTEBOOK_PRODUCT_ID,
+      capabilityId: CWA_GEMINI_NOTEBOOK_AUDIO_OVERVIEW_CAPABILITY_ID,
+      notebookUrl,
+      tabId: tab.id,
+      elapsedMs: Math.round(performance.now() - startedAt),
+      observedArtifactRef,
+      artifactStatus: "COMPLETED",
+      artifactTitle: String(durableRow.title || ""),
+      artifactDetails: String(durableRow.details || ""),
+      completionProven: true,
+      reloadVerified: true,
+      finalityEvidence: CWA_GEMINI_NOTEBOOK_AUDIO_COMPLETION_FINALITY,
+      canonicalCompletionProven: false,
+      automaticRetry: false,
+      writePerformed: false,
+      navigationPerformed: true
+    };
+  } finally {
+    if (attached) {
+      try {
+        await chrome.debugger.detach(debuggee);
+      } catch {}
+    }
+  }
 }
 
 function _cwaGeminiNotebookClickAddSourceExpression() {
@@ -695,9 +1341,14 @@ async function _cwaOnNativeMessageWithGeminiNotebook(
   port,
   next
 ) {
+  const operation = message?.type;
   if (
     message?.protocol !== BRIDGE_PROTOCOL_VERSION ||
-    message?.type !== CWA_GEMINI_NOTEBOOK_ADD_URL_SOURCE_OPERATION
+    ![
+      CWA_GEMINI_NOTEBOOK_ADD_URL_SOURCE_OPERATION,
+      CWA_GEMINI_NOTEBOOK_GENERATE_AUDIO_OVERVIEW_OPERATION,
+      CWA_GEMINI_NOTEBOOK_OBSERVE_AUDIO_OVERVIEW_OPERATION
+    ].includes(operation)
   ) {
     return next(message, port);
   }
@@ -705,11 +1356,23 @@ async function _cwaOnNativeMessageWithGeminiNotebook(
   const requestId = message.request_id;
   if (typeof requestId !== "string" || !requestId) return;
 
+  const responseType =
+    operation === CWA_GEMINI_NOTEBOOK_GENERATE_AUDIO_OVERVIEW_OPERATION
+      ? "gemini_notebook_generate_audio_overview_result"
+      : operation === CWA_GEMINI_NOTEBOOK_OBSERVE_AUDIO_OVERVIEW_OPERATION
+        ? "gemini_notebook_observe_audio_overview_result"
+        : "gemini_notebook_add_url_source_result";
+
   try {
-    const result = await _cwaGeminiNotebookAddUrlSource(message);
+    const result =
+      operation === CWA_GEMINI_NOTEBOOK_GENERATE_AUDIO_OVERVIEW_OPERATION
+        ? await _cwaGeminiNotebookGenerateAudioOverview(message)
+        : operation === CWA_GEMINI_NOTEBOOK_OBSERVE_AUDIO_OVERVIEW_OPERATION
+          ? await _cwaGeminiNotebookObserveAudioOverview(message)
+          : await _cwaGeminiNotebookAddUrlSource(message);
     safePortPost(port, {
       protocol: BRIDGE_PROTOCOL_VERSION,
-      type: "gemini_notebook_add_url_source_result",
+      type: responseType,
       request_id: requestId,
       ok: true,
       ...result
@@ -717,7 +1380,7 @@ async function _cwaOnNativeMessageWithGeminiNotebook(
   } catch (error) {
     safePortPost(port, {
       protocol: BRIDGE_PROTOCOL_VERSION,
-      type: "gemini_notebook_add_url_source_result",
+      type: responseType,
       request_id: requestId,
       ok: false,
       error: error instanceof Error ? error.message : String(error)
