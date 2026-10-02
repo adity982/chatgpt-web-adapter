@@ -85,45 +85,142 @@ async function _pr113SubmitTextWithEnterOnce(debuggee) {
   return { strategy: "enter_fallback", selector: null };
 }
 
-async function _pr113SubmitTextWithMouseOnce(debuggee, point) {
-  const x = Number(point?.x);
-  const y = Number(point?.y);
-  if (!Number.isFinite(x) || !Number.isFinite(y)) {
+async function _pr113PrepareMouseCommitTab(debuggee) {
+  const tabId = Number.isInteger(debuggee?.tabId) ? debuggee.tabId : null;
+  if (tabId === null) {
+    return {
+      activated: false,
+      previousActiveTabId: null
+    };
+  }
+
+  const tab = await chrome.tabs.get(tabId);
+  if (tab?.active === true) {
+    return {
+      activated: false,
+      previousActiveTabId: null
+    };
+  }
+
+  let previousActiveTabId = null;
+  if (Number.isInteger(tab?.windowId)) {
+    try {
+      const activeTabs = await chrome.tabs.query({
+        active: true,
+        windowId: tab.windowId
+      });
+      const previous = activeTabs.find(
+        (candidate) =>
+          Number.isInteger(candidate?.id) &&
+          candidate.id !== tabId
+      );
+      previousActiveTabId = Number.isInteger(previous?.id)
+        ? previous.id
+        : null;
+    } catch {
+      previousActiveTabId = null;
+    }
+  }
+
+  const activated = await chrome.tabs.update(tabId, { active: true });
+  if (activated?.active !== true) {
+    const current = await chrome.tabs.get(tabId);
+    if (current?.active !== true) {
+      throw new Error("PR11_3_COMMIT_TAB_ACTIVATION_NOT_PROVEN");
+    }
+  }
+
+  return {
+    activated: true,
+    previousActiveTabId
+  };
+}
+
+async function _pr113RestoreMouseCommitTab(state) {
+  if (
+    state?.activated !== true ||
+    !Number.isInteger(state?.previousActiveTabId)
+  ) {
+    return;
+  }
+
+  try {
+    await chrome.tabs.update(state.previousActiveTabId, { active: true });
+  } catch {
+    // Selection restoration is post-commit cleanup only. It must never rewrite
+    // a possibly committed product write into a local failure.
+  }
+}
+
+async function _pr113SubmitTextWithMouseOnce(
+  debuggee,
+  point,
+  timeoutMs = DEFAULT_SUBMIT_READY_TIMEOUT_MS
+) {
+  const initialX = Number(point?.x);
+  const initialY = Number(point?.y);
+  if (!Number.isFinite(initialX) || !Number.isFinite(initialY)) {
     throw new Error("CHATGPT_SEND_BUTTON_POINT_INVALID");
   }
 
-  // move/press are pre-commit for the established CWA click contract. If either
-  // fails, Enter remains a single safe fallback because mouseReleased has not
-  // been attempted.
-  await sendCommand(debuggee, "Input.dispatchMouseEvent", {
-    type: "mouseMoved",
-    x,
-    y
-  });
-  await sendCommand(debuggee, "Input.dispatchMouseEvent", {
-    type: "mousePressed",
-    x,
-    y,
-    button: "left",
-    clickCount: 1
-  });
+  // ChatGPT may update composer geometry when the browser-owned runtime tab is
+  // brought to foreground. Activate first, then re-resolve the current
+  // product-owned Send control before the protected click boundary.
+  const commitTab = await _pr113PrepareMouseCommitTab(debuggee);
 
-  // mouseReleased is the click protected-write boundary. Mark the outcome
-  // ambiguous as soon as the command is attempted: a rejected/lost CDP ACK can
-  // coexist with a real page click and therefore can never authorize Enter.
   try {
+    let commitPoint = point;
+    if (commitTab.activated === true) {
+      commitPoint = await _pr113WaitForSubmitPoint(
+        debuggee,
+        Math.min(timeoutMs, DEFAULT_SUBMIT_READY_TIMEOUT_MS)
+      );
+    }
+
+    const x = Number(commitPoint?.x);
+    const y = Number(commitPoint?.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      throw new Error("CHATGPT_SEND_BUTTON_POINT_INVALID_AFTER_ACTIVATION");
+    }
+
+    // move/press are pre-commit for the established CWA click contract. If either
+    // fails, Enter remains a single safe fallback because mouseReleased has not
+    // been attempted.
     await sendCommand(debuggee, "Input.dispatchMouseEvent", {
-      type: "mouseReleased",
+      type: "mouseMoved",
+      x,
+      y
+    });
+    await sendCommand(debuggee, "Input.dispatchMouseEvent", {
+      type: "mousePressed",
       x,
       y,
       button: "left",
       clickCount: 1
     });
-  } catch {
-    throw new Error(PR113_MOUSE_RELEASE_UNCONFIRMED);
-  }
 
-  return { strategy: "send_button_click", selector: point?.selector ?? null };
+    // mouseReleased is the click protected-write boundary. Mark the outcome
+    // ambiguous as soon as the command is attempted: a rejected/lost CDP ACK can
+    // coexist with a real page click and therefore can never authorize Enter.
+    try {
+      await sendCommand(debuggee, "Input.dispatchMouseEvent", {
+        type: "mouseReleased",
+        x,
+        y,
+        button: "left",
+        clickCount: 1
+      });
+    } catch {
+      throw new Error(PR113_MOUSE_RELEASE_UNCONFIRMED);
+    }
+
+    return {
+      strategy: "send_button_click",
+      selector: commitPoint?.selector ?? null
+    };
+  } finally {
+    await _pr113RestoreMouseCommitTab(commitTab);
+  }
 }
 
 async function _pr113SubmitOfficialTextWithoutPostCommitRetry(
@@ -146,7 +243,7 @@ async function _pr113SubmitOfficialTextWithoutPostCommitRetry(
   }
 
   try {
-    return await _pr113SubmitTextWithMouseOnce(debuggee, point);
+    return await _pr113SubmitTextWithMouseOnce(debuggee, point, timeoutMs);
   } catch (error) {
     if (_pr113IsMouseReleaseOutcomeUnconfirmed(error)) {
       throw error;

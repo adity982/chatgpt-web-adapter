@@ -71,16 +71,48 @@ const log = [];
 let _pr92ActiveRichInputContext = null;
 let _pr813TemporaryTurnContext = null;
 const DEFAULT_SUBMIT_READY_TIMEOUT_MS = 10000;
+const tabState = new Map([
+  [66, { id: 66, active: scenario !== "already_active", windowId: 1 }],
+  [77, { id: 77, active: scenario === "already_active", windowId: 1 }]
+]);
+const chrome = {
+  tabs: {
+    get: async (tabId) => ({ ...tabState.get(tabId) }),
+    query: async ({ active, windowId }) => Array.from(tabState.values())
+      .filter((tab) => (
+        (active !== true || tab.active === true) &&
+        (!Number.isInteger(windowId) || tab.windowId === windowId)
+      ))
+      .map((tab) => ({ ...tab })),
+    update: async (tabId, patch) => {
+      const target = tabState.get(tabId);
+      if (!target) throw new Error("tab-missing");
+      if (patch?.active === true) {
+        for (const tab of tabState.values()) {
+          if (tab.windowId === target.windowId) tab.active = false;
+        }
+        target.active = true;
+        log.push(`tabs.update:${tabId}:active=true`);
+      }
+      return { ...target };
+    }
+  }
+};
 
 async function submitOfficialPageTurn() {
   log.push("prior_submit");
   return { strategy: "prior_specialized", selector: null };
 }
 
+let waitButtonCalls = 0;
 async function waitForSendButtonPoint() {
   log.push("wait_button");
+  waitButtonCalls += 1;
   if (scenario === "wait_fail" || scenario === "enter_keyup_fail" || scenario === "enter_keydown_fail") {
     throw new Error("button-not-ready");
+  }
+  if (scenario === "success" && waitButtonCalls >= 2) {
+    return { x: 13, y: 24, selector: "send-selector" };
   }
   return { x: 10, y: 20, selector: "send-selector" };
 }
@@ -93,6 +125,9 @@ async function locateAndFocusComposer() {
 async function sendCommand(_debuggee, method, params) {
   const marker = `${method}:${params?.type || "none"}:${params?.key || "none"}`;
   log.push(marker);
+  if (method === "Input.dispatchMouseEvent") {
+    log.push(`mouse_point:${params?.x}:${params?.y}`);
+  }
   if (scenario === "move_fail" && params?.type === "mouseMoved") {
     throw new Error("move-failed");
   }
@@ -121,7 +156,7 @@ if (scenario === "temporary") {
 
 (async () => {
   try {
-    const result = await _pr113SubmitOfficialTextWithoutPostCommitRetry(\n      {},\n      1000,\n      submitOfficialPageTurn\n    );
+    const result = await _pr113SubmitOfficialTextWithoutPostCommitRetry(\n      { tabId: 77 },\n      1000,\n      submitOfficialPageTurn\n    );
     await new Promise((resolve) => setTimeout(resolve, 0));
     console.log(JSON.stringify({ ok: true, result, log }));
   } catch (error) {
@@ -176,6 +211,36 @@ def test_successful_click_uses_one_mouse_commit_and_no_enter(tmp_path: Path) -> 
         "selector": "send-selector",
     }
     assert len(_enter_keydowns(result["log"])) == 0
+    assert sum("mouseReleased" in item for item in result["log"]) == 1
+
+
+def test_background_tab_activation_refreshes_send_before_single_commit(
+    tmp_path: Path,
+) -> None:
+    result = _run_node_scenario(tmp_path, "success")
+
+    assert result["ok"] is True
+    log = result["log"]
+    activate = log.index("tabs.update:77:active=true")
+    waits = [i for i, item in enumerate(log) if item == "wait_button"]
+    moved = next(i for i, item in enumerate(log) if "mouseMoved" in item)
+    released = next(i for i, item in enumerate(log) if "mouseReleased" in item)
+    restore = log.index("tabs.update:66:active=true")
+
+    assert len(waits) == 2
+    assert activate < waits[1] < moved < released < restore
+    assert "mouse_point:13:24" in log
+    assert sum("mouseReleased" in item for item in log) == 1
+    assert len(_enter_keydowns(log)) == 0
+
+
+def test_already_active_commit_tab_does_not_churn_or_refresh(tmp_path: Path) -> None:
+    result = _run_node_scenario(tmp_path, "already_active")
+
+    assert result["ok"] is True
+    assert not any(item.startswith("tabs.update:") for item in result["log"])
+    assert result["log"].count("wait_button") == 1
+    assert "mouse_point:10:20" in result["log"]
     assert sum("mouseReleased" in item for item in result["log"]) == 1
 
 
