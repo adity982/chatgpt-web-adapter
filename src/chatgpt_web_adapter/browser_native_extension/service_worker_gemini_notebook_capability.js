@@ -15,6 +15,19 @@ const CWA_GEMINI_NOTEBOOK_OBSERVE_AUDIO_OVERVIEW_OPERATION =
   "gemini_notebook_observe_audio_overview";
 const CWA_GEMINI_NOTEBOOK_AUDIO_ARTIFACT_RETRIEVAL_OPERATION =
   "gemini_notebook_audio_artifact_retrieval";
+const CWA_GEMINI_NOTEBOOK_VIDEO_GENERATION_OPERATION =
+  "gemini_notebook_video_generation";
+const CWA_GEMINI_NOTEBOOK_VIDEO_ARTIFACT_OBSERVE_OPERATION =
+  "gemini_notebook_video_artifact_observe";
+const CWA_GEMINI_NOTEBOOK_VIDEO_ARTIFACT_RETRIEVAL_OPERATION =
+  "gemini_notebook_video_artifact_retrieval";
+const CWA_GEMINI_NOTEBOOK_VIDEO_ARTIFACT_RETRIEVAL_CHUNK_TYPE =
+  "gemini_notebook_video_artifact_retrieval_chunk";
+const CWA_GEMINI_NOTEBOOK_VIDEO_BYTE_CHUNK_BASE64_CHARS = 600_000;
+const CWA_GEMINI_NOTEBOOK_VIDEO_PENDING_EVIDENCE =
+  "PAGE_DOM_BACKGROUND_VIDEO_ARTIFACT_PENDING";
+const CWA_GEMINI_NOTEBOOK_VIDEO_COMPLETION_FINALITY =
+  "PAGE_DOM_DURABLE_BACKGROUND_VIDEO_ARTIFACT_COMPLETION";
 const CWA_GEMINI_NOTEBOOK_AUDIO_ARTIFACT_RETRIEVAL_CHUNK_TYPE =
   "gemini_notebook_audio_artifact_retrieval_chunk";
 const CWA_GEMINI_NOTEBOOK_AUDIO_BYTE_CHUNK_BASE64_CHARS = 600_000;
@@ -165,6 +178,989 @@ function _cwaGeminiNotebookSourceRowsExpression() {
 }
 
 
+
+
+function _cwaGeminiNotebookStudioCreationControlsExpression() {
+  return `(() => {
+    const visible = (element) => {
+      if (!(element instanceof Element)) return false;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return (
+        rect.width > 0 &&
+        rect.height > 0 &&
+        style.display !== "none" &&
+        style.visibility !== "hidden"
+      );
+    };
+    const normalize = (value) =>
+      String(value || "").replace(/\\s+/g, " ").trim();
+    const clip = (value, limit = 180) => normalize(value).slice(0, limit);
+    const classText = (element) =>
+      clip(
+        typeof element?.className === "string"
+          ? element.className
+          : element?.getAttribute?.("class") || "",
+        180
+      );
+    const iconTexts = (element) =>
+      Array.from(element?.querySelectorAll?.("mat-icon") || [])
+        .slice(0, 12)
+        .map((icon) => clip(icon.textContent, 48))
+        .filter(Boolean);
+
+    const notebookUrl =
+      location.origin + location.pathname.replace(/\\/$/, "");
+    const studio = document.querySelector("section.studio-panel");
+    const controls = [];
+
+    if (studio instanceof Element && visible(studio)) {
+      const owners = Array.from(
+        studio.querySelectorAll("basic-create-artifact-button")
+      ).slice(0, 24);
+
+      for (let index = 0; index < owners.length; index += 1) {
+        const owner = owners[index];
+        if (!visible(owner)) continue;
+        const control =
+          owner.querySelector("[role='button']") ||
+          owner.querySelector("button") ||
+          null;
+        if (!(control instanceof Element) || !visible(control)) continue;
+
+        controls.push({
+          index,
+          ownerTag: String(owner.tagName || "").toLowerCase(),
+          ownerClassName: classText(owner),
+          controlTag: String(control.tagName || "").toLowerCase(),
+          controlClassName: classText(control),
+          role: clip(control.getAttribute("role") || "", 48),
+          ariaLabel: clip(control.getAttribute("aria-label") || "", 180),
+          title: clip(control.getAttribute("title") || "", 180),
+          text: clip(control.innerText || control.textContent || "", 180),
+          disabled:
+            "disabled" in control
+              ? Boolean(control.disabled)
+              : control.getAttribute("aria-disabled") === "true",
+          icons: iconTexts(control)
+        });
+      }
+    }
+
+    return {
+      notebookUrl,
+      studioFound: studio instanceof Element && visible(studio),
+      controls
+    };
+  })()`;
+}
+
+async function _cwaGeminiNotebookProbeStudioCreationControls(message) {
+  if (message?.productId !== CWA_GEMINI_NOTEBOOK_PRODUCT_ID) {
+    throw new Error("GEMINI_NOTEBOOK_PRODUCT_ID_MISMATCH");
+  }
+
+  const notebookUrl = _cwaGeminiNotebookCanonicalNotebookUrl(
+    message?.notebookUrl
+  );
+  if (!notebookUrl) {
+    throw new Error("GEMINI_NOTEBOOK_NOTEBOOK_URL_INVALID");
+  }
+
+  const startedAt = performance.now();
+  const tab = await _cwaGeminiNotebookFindExactOpenTab(notebookUrl);
+  const debuggee = { tabId: tab.id };
+  let attached = false;
+
+  try {
+    await chrome.debugger.attach(debuggee, CDP_PROTOCOL_VERSION);
+    attached = true;
+    await _cwaBaseSendCommand(debuggee, "Runtime.enable");
+
+    const state = await _cwaGeminiNotebookMutationEvaluate(
+      debuggee,
+      _cwaGeminiNotebookStudioCreationControlsExpression()
+    );
+    if (state?.notebookUrl !== notebookUrl) {
+      throw new Error("GEMINI_NOTEBOOK_STUDIO_PROBE_ROUTE_MISMATCH");
+    }
+    if (state?.studioFound !== true) {
+      throw new Error("GEMINI_NOTEBOOK_STUDIO_OWNER_MISSING");
+    }
+
+    const controls = Array.isArray(state?.controls)
+      ? state.controls.slice(0, 24)
+      : [];
+
+    return {
+      productId: CWA_GEMINI_NOTEBOOK_PRODUCT_ID,
+      notebookUrl,
+      tabId: tab.id,
+      elapsedMs: Math.round(performance.now() - startedAt),
+      studioFound: true,
+      creationControls: controls,
+      writePerformed: false,
+      navigationPerformed: false,
+      rawDomExported: false
+    };
+  } finally {
+    if (attached) {
+      try {
+        await chrome.debugger.detach(debuggee);
+      } catch {
+        // Read-only characterization cleanup has no product effect.
+      }
+    }
+  }
+}
+
+
+function _cwaGeminiNotebookClickVideoOverviewExpression() {
+  return `(() => {
+    const visible = (element) => {
+      if (!(element instanceof Element)) return false;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return (
+        rect.width > 0 &&
+        rect.height > 0 &&
+        style.display !== "none" &&
+        style.visibility !== "hidden"
+      );
+    };
+
+    const studio = document.querySelector("section.studio-panel");
+    if (!(studio instanceof Element) || !visible(studio)) {
+      return { clicked: false, reason: "STUDIO_OWNER_MISSING" };
+    }
+
+    const candidates = Array.from(
+      studio.querySelectorAll("basic-create-artifact-button")
+    )
+      .map((owner) => {
+        const control =
+          owner.querySelector("[role='button']") ||
+          owner.querySelector("button") ||
+          null;
+        const icons =
+          control instanceof Element
+            ? Array.from(control.querySelectorAll("mat-icon")).map(
+                (icon) => String(icon.textContent || "").trim()
+              )
+            : [];
+        return { control, icons };
+      })
+      .filter(
+        (entry) =>
+          entry.control instanceof Element &&
+          visible(entry.control) &&
+          entry.icons.includes("videocam")
+      );
+
+    if (candidates.length !== 1) {
+      return {
+        clicked: false,
+        reason: "VIDEO_CREATE_CONTROL_IDENTITY_UNRESOLVED",
+        candidateCount: candidates.length
+      };
+    }
+
+    const control = candidates[0].control;
+    if (
+      control.getAttribute("aria-disabled") === "true" ||
+      ("disabled" in control && Boolean(control.disabled))
+    ) {
+      return { clicked: false, reason: "VIDEO_CREATE_CONTROL_DISABLED" };
+    }
+
+    control.click();
+    return { clicked: true };
+  })()`;
+}
+
+function _cwaGeminiNotebookVisibleDialogInventoryExpression() {
+  return `(() => {
+    const visible = (element) => {
+      if (!(element instanceof Element)) return false;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return (
+        rect.width > 0 &&
+        rect.height > 0 &&
+        style.display !== "none" &&
+        style.visibility !== "hidden"
+      );
+    };
+    const normalize = (value) =>
+      String(value || "").replace(/\\s+/g, " ").trim();
+    const clip = (value, limit = 220) => normalize(value).slice(0, limit);
+    const classText = (element) =>
+      clip(
+        typeof element?.className === "string"
+          ? element.className
+          : element?.getAttribute?.("class") || "",
+        180
+      );
+    const iconTexts = (element, limit = 12) =>
+      Array.from(element?.querySelectorAll?.("mat-icon") || [])
+        .slice(0, limit)
+        .map((icon) => clip(icon.textContent, 48))
+        .filter(Boolean);
+
+    const dialogs = Array.from(
+      document.querySelectorAll(
+        "mat-dialog-container[role='dialog'],[role='dialog']"
+      )
+    )
+      .filter(visible)
+      .slice(0, 4)
+      .map((dialog, index) => {
+        const controls = Array.from(
+          dialog.querySelectorAll("button,[role='button']")
+        )
+          .filter(visible)
+          .slice(0, 20)
+          .map((control, controlIndex) => ({
+            index: controlIndex,
+            tag: String(control.tagName || "").toLowerCase(),
+            className: classText(control),
+            role: clip(control.getAttribute("role") || "", 48),
+            ariaLabel: clip(control.getAttribute("aria-label") || "", 180),
+            title: clip(control.getAttribute("title") || "", 180),
+            text: clip(control.innerText || control.textContent || "", 220),
+            disabled:
+              "disabled" in control
+                ? Boolean(control.disabled)
+                : control.getAttribute("aria-disabled") === "true",
+            icons: iconTexts(control, 8)
+          }));
+
+        return {
+          index,
+          tag: String(dialog.tagName || "").toLowerCase(),
+          className: classText(dialog),
+          role: clip(dialog.getAttribute("role") || "", 48),
+          ariaLabel: clip(dialog.getAttribute("aria-label") || "", 180),
+          title: clip(dialog.getAttribute("title") || "", 180),
+          text: clip(dialog.innerText || dialog.textContent || "", 600),
+          icons: iconTexts(dialog, 16),
+          controls
+        };
+      });
+
+    return { dialogs };
+  })()`;
+}
+
+async function _cwaGeminiNotebookProbeVideoConfig(message) {
+  if (message?.productId !== CWA_GEMINI_NOTEBOOK_PRODUCT_ID) {
+    throw new Error("GEMINI_NOTEBOOK_PRODUCT_ID_MISMATCH");
+  }
+
+  const notebookUrl = _cwaGeminiNotebookCanonicalNotebookUrl(
+    message?.notebookUrl
+  );
+  if (!notebookUrl) {
+    throw new Error("GEMINI_NOTEBOOK_NOTEBOOK_URL_INVALID");
+  }
+
+  const timeoutMs = Math.max(
+    3000,
+    Math.min(Number(message?.timeoutMs) || 15000, 30000)
+  );
+  const startedAt = performance.now();
+  const deadlineAt = startedAt + timeoutMs;
+  const tab = await _cwaGeminiNotebookFindExactOpenTab(notebookUrl);
+  const debuggee = { tabId: tab.id };
+  let attached = false;
+  let configurationOpenMayHaveExecuted = false;
+
+  const artifactRefs = (state) =>
+    Array.isArray(state?.rows)
+      ? state.rows
+          .map((row) => String(row?.observedArtifactRef || ""))
+          .filter(Boolean)
+          .sort()
+      : [];
+
+  try {
+    await chrome.debugger.attach(debuggee, CDP_PROTOCOL_VERSION);
+    attached = true;
+    await _cwaBaseSendCommand(debuggee, "Runtime.enable");
+
+    const initialDialogs = await _cwaGeminiNotebookMutationEvaluate(
+      debuggee,
+      _cwaGeminiNotebookVisibleDialogInventoryExpression()
+    );
+    const initialDialogList = Array.isArray(initialDialogs?.dialogs)
+      ? initialDialogs.dialogs
+      : [];
+    if (initialDialogList.length !== 0) {
+      throw new Error(
+        "GEMINI_NOTEBOOK_VIDEO_CONFIG_PRESTATE_DIALOG_OPEN:" +
+          String(initialDialogList.length)
+      );
+    }
+
+    const beforeArtifacts = await _cwaGeminiNotebookMutationEvaluate(
+      debuggee,
+      _cwaGeminiNotebookAudioArtifactItemsExpression()
+    );
+    if (beforeArtifacts?.notebookUrl !== notebookUrl) {
+      throw new Error("GEMINI_NOTEBOOK_VIDEO_CONFIG_ROUTE_MISMATCH");
+    }
+    const beforeArtifactRefs = artifactRefs(beforeArtifacts);
+
+    configurationOpenMayHaveExecuted = true;
+    const clicked = await _cwaGeminiNotebookMutationEvaluate(
+      debuggee,
+      _cwaGeminiNotebookClickVideoOverviewExpression()
+    );
+    if (clicked?.clicked !== true) {
+      throw new Error(
+        "GEMINI_NOTEBOOK_VIDEO_CREATE_CONTROL_CLICK_FAILED:" +
+          String(clicked?.reason || "UNKNOWN")
+      );
+    }
+
+    let dialog = null;
+    while (performance.now() < deadlineAt) {
+      const state = await _cwaGeminiNotebookMutationEvaluate(
+        debuggee,
+        _cwaGeminiNotebookVisibleDialogInventoryExpression()
+      );
+      const dialogs = Array.isArray(state?.dialogs) ? state.dialogs : [];
+      if (dialogs.length > 1) {
+        throw new Error(
+          "GEMINI_NOTEBOOK_VIDEO_CONFIG_DIALOG_AMBIGUOUS:" +
+            String(dialogs.length)
+        );
+      }
+      if (dialogs.length === 1) {
+        dialog = dialogs[0];
+        break;
+      }
+      await sleep(100);
+    }
+    if (!dialog) {
+      throw new Error("GEMINI_NOTEBOOK_VIDEO_CONFIG_DIALOG_TIMEOUT");
+    }
+
+    const afterArtifacts = await _cwaGeminiNotebookMutationEvaluate(
+      debuggee,
+      _cwaGeminiNotebookAudioArtifactItemsExpression()
+    );
+    if (afterArtifacts?.notebookUrl !== notebookUrl) {
+      throw new Error("GEMINI_NOTEBOOK_VIDEO_CONFIG_ROUTE_MISMATCH");
+    }
+    const afterArtifactRefs = artifactRefs(afterArtifacts);
+    const artifactLibraryUnchanged =
+      JSON.stringify(beforeArtifactRefs) === JSON.stringify(afterArtifactRefs);
+    if (!artifactLibraryUnchanged) {
+      throw new Error(
+        "GEMINI_NOTEBOOK_VIDEO_CONFIG_ARTIFACT_LIBRARY_CHANGED"
+      );
+    }
+
+    return {
+      productId: CWA_GEMINI_NOTEBOOK_PRODUCT_ID,
+      notebookUrl,
+      tabId: tab.id,
+      elapsedMs: Math.round(performance.now() - startedAt),
+      createControlIcon: "videocam",
+      configurationSurfaceObserved: true,
+      dialog,
+      beforeArtifactRefs,
+      afterArtifactRefs,
+      artifactLibraryUnchanged: true,
+      configurationOpenClickPerformed: true,
+      generationStartedProven: false,
+      durableProductWriteProven: false,
+      navigationPerformed: false,
+      automaticRetry: false,
+      rawDomExported: false
+    };
+  } catch (error) {
+    if (configurationOpenMayHaveExecuted) {
+      throw _cwaGeminiNotebookAmbiguousError(error);
+    }
+    throw error;
+  } finally {
+    if (attached) {
+      try {
+        await chrome.debugger.detach(debuggee);
+      } catch {
+        // Detach cannot change the already-classified config observation.
+      }
+    }
+  }
+}
+
+
+function _cwaGeminiNotebookVideoConfigReadinessExpression() {
+  return `(() => {
+    const visible = (element) => {
+      if (!(element instanceof Element)) return false;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return (
+        rect.width > 0 &&
+        rect.height > 0 &&
+        style.display !== "none" &&
+        style.visibility !== "hidden"
+      );
+    };
+
+    const dialogs = Array.from(
+      document.querySelectorAll(
+        "mat-dialog-container[role='dialog'],[role='dialog']"
+      )
+    ).filter(visible);
+    if (dialogs.length !== 1) {
+      return {
+        ready: false,
+        dialogCount: dialogs.length,
+        tonalCandidateCount: 0
+      };
+    }
+
+    const dialog = dialogs[0];
+    const icons = Array.from(dialog.querySelectorAll("mat-icon")).map(
+      (icon) => String(icon.textContent || "").trim()
+    );
+    if (!icons.includes("subscriptions")) {
+      return {
+        ready: false,
+        dialogCount: 1,
+        dialogOwnerProven: false,
+        tonalCandidateCount: 0
+      };
+    }
+
+    const actualButtons = Array.from(
+      dialog.querySelectorAll("button")
+    ).filter(visible);
+    const tonalCandidates = actualButtons.filter(
+      (button) =>
+        button.classList.contains("mat-tonal-button") &&
+        !button.disabled &&
+        button.getAttribute("aria-disabled") !== "true"
+    );
+    return {
+      ready: tonalCandidates.length === 1,
+      dialogCount: 1,
+      dialogOwnerProven: true,
+      actualButtonCount: actualButtons.length,
+      tonalCandidateCount: tonalCandidates.length
+    };
+  })()`;
+}
+
+function _cwaGeminiNotebookClickVideoGenerateNowExpression() {
+  return `(() => {
+    const visible = (element) => {
+      if (!(element instanceof Element)) return false;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return (
+        rect.width > 0 &&
+        rect.height > 0 &&
+        style.display !== "none" &&
+        style.visibility !== "hidden"
+      );
+    };
+
+    const dialogs = Array.from(
+      document.querySelectorAll(
+        "mat-dialog-container[role='dialog'],[role='dialog']"
+      )
+    ).filter(visible);
+    if (dialogs.length !== 1) {
+      return {
+        clicked: false,
+        reason: "VIDEO_CONFIG_DIALOG_IDENTITY_UNRESOLVED",
+        dialogCount: dialogs.length
+      };
+    }
+
+    const dialog = dialogs[0];
+    const icons = Array.from(dialog.querySelectorAll("mat-icon")).map(
+      (icon) => String(icon.textContent || "").trim()
+    );
+    if (!icons.includes("subscriptions")) {
+      return {
+        clicked: false,
+        reason: "VIDEO_CONFIG_DIALOG_OWNER_UNRESOLVED"
+      };
+    }
+
+    const actualButtons = Array.from(
+      dialog.querySelectorAll("button")
+    ).filter(visible);
+    const tonalCandidates = actualButtons.filter(
+      (button) =>
+        button.classList.contains("mat-tonal-button") &&
+        !button.disabled &&
+        button.getAttribute("aria-disabled") !== "true"
+    );
+    if (tonalCandidates.length !== 1) {
+      return {
+        clicked: false,
+        reason: "VIDEO_GENERATE_NOW_IDENTITY_UNRESOLVED",
+        actualButtonCount: actualButtons.length,
+        tonalCandidateCount: tonalCandidates.length
+      };
+    }
+
+    tonalCandidates[0].click();
+    return { clicked: true };
+  })()`;
+}
+
+async function _cwaGeminiNotebookWaitForVideoConfig(debuggee, deadlineAt) {
+  while (performance.now() < deadlineAt) {
+    const state = await _cwaGeminiNotebookMutationEvaluate(
+      debuggee,
+      _cwaGeminiNotebookVideoConfigReadinessExpression()
+    );
+    if (state?.ready === true) return state;
+    await sleep(100);
+  }
+  throw new Error("GEMINI_NOTEBOOK_VIDEO_CONFIG_TIMEOUT");
+}
+
+async function _cwaGeminiNotebookWaitForStableArtifactDelta(
+  debuggee,
+  notebookUrl,
+  beforeRefs,
+  deadlineAt
+) {
+  const before = new Set(beforeRefs);
+  let stableSignature = null;
+  let stableSince = null;
+  let lastNewCount = -1;
+
+  while (performance.now() < deadlineAt) {
+    const state = await _cwaGeminiNotebookMutationEvaluate(
+      debuggee,
+      _cwaGeminiNotebookAudioArtifactItemsExpression()
+    );
+    if (state?.notebookUrl !== notebookUrl) {
+      throw new Error("GEMINI_NOTEBOOK_VIDEO_NOTEBOOK_ROUTE_CHANGED");
+    }
+    if (
+      state?.studioFound !== true ||
+      state?.containerFound !== true ||
+      state?.libraryFound !== true
+    ) {
+      throw new Error("GEMINI_NOTEBOOK_VIDEO_ARTIFACT_LIBRARY_NOT_READY");
+    }
+
+    const rows = Array.isArray(state?.rows) ? state.rows : [];
+    const newRows = rows.filter(
+      (row) =>
+        row?.observedArtifactRef &&
+        !before.has(String(row.observedArtifactRef))
+    );
+    lastNewCount = newRows.length;
+
+    if (newRows.length > 1) {
+      throw new Error(
+        "GEMINI_NOTEBOOK_VIDEO_ARTIFACT_DELTA_AMBIGUOUS:" +
+          String(newRows.length)
+      );
+    }
+    if (newRows.length === 0) {
+      stableSignature = null;
+      stableSince = null;
+      await sleep(200);
+      continue;
+    }
+
+    const row = newRows[0];
+    if (
+      row.statusCandidate !== "PENDING_CANDIDATE" &&
+      row.statusCandidate !== "NON_PENDING_CANDIDATE"
+    ) {
+      stableSignature = null;
+      stableSince = null;
+      await sleep(200);
+      continue;
+    }
+
+    const signature = JSON.stringify({
+      observedArtifactRef: row.observedArtifactRef,
+      statusCandidate: row.statusCandidate,
+      actionDisabled: row.actionDisabled,
+      icons: row.icons
+    });
+    if (signature !== stableSignature) {
+      stableSignature = signature;
+      stableSince = performance.now();
+    } else if (
+      stableSince !== null &&
+      performance.now() - stableSince >=
+        CWA_GEMINI_NOTEBOOK_AUDIO_OBSERVATION_STABLE_MS
+    ) {
+      return { state, row };
+    }
+    await sleep(200);
+  }
+
+  throw new Error(
+    "GEMINI_NOTEBOOK_VIDEO_ARTIFACT_DELTA_TIMEOUT:new=" +
+      String(lastNewCount)
+  );
+}
+
+async function _cwaGeminiNotebookProbeVideoGeneration(message) {
+  if (message?.productId !== CWA_GEMINI_NOTEBOOK_PRODUCT_ID) {
+    throw new Error("GEMINI_NOTEBOOK_PRODUCT_ID_MISMATCH");
+  }
+
+  const notebookUrl = _cwaGeminiNotebookCanonicalNotebookUrl(
+    message?.notebookUrl
+  );
+  if (!notebookUrl) {
+    throw new Error("GEMINI_NOTEBOOK_NOTEBOOK_URL_INVALID");
+  }
+
+  const timeoutMs = Math.max(
+    5000,
+    Math.min(Number(message?.timeoutMs) || 60000, 120000)
+  );
+  const startedAt = performance.now();
+  const deadlineAt = startedAt + timeoutMs;
+  const tab = await _cwaGeminiNotebookFindExactOpenTab(notebookUrl);
+  const debuggee = { tabId: tab.id };
+  let attached = false;
+  let generationCommitMayHaveExecuted = false;
+
+  const artifactRefs = (state) =>
+    Array.isArray(state?.rows)
+      ? state.rows
+          .map((row) => String(row?.observedArtifactRef || ""))
+          .filter(Boolean)
+          .sort()
+      : [];
+
+  try {
+    await chrome.debugger.attach(debuggee, CDP_PROTOCOL_VERSION);
+    attached = true;
+    await _cwaBaseSendCommand(debuggee, "Runtime.enable");
+
+    const initialDialogs = await _cwaGeminiNotebookMutationEvaluate(
+      debuggee,
+      _cwaGeminiNotebookVisibleDialogInventoryExpression()
+    );
+    const initialDialogList = Array.isArray(initialDialogs?.dialogs)
+      ? initialDialogs.dialogs
+      : [];
+    if (initialDialogList.length !== 0) {
+      throw new Error(
+        "GEMINI_NOTEBOOK_VIDEO_GENERATION_PRESTATE_DIALOG_OPEN:" +
+          String(initialDialogList.length)
+      );
+    }
+
+    const before = await _cwaGeminiNotebookMutationEvaluate(
+      debuggee,
+      _cwaGeminiNotebookAudioArtifactItemsExpression()
+    );
+    if (
+      before?.notebookUrl !== notebookUrl ||
+      before?.studioFound !== true ||
+      before?.containerFound !== true ||
+      before?.libraryFound !== true
+    ) {
+      throw new Error("GEMINI_NOTEBOOK_VIDEO_GENERATION_PRESTATE_INVALID");
+    }
+    const beforeArtifactRefs = artifactRefs(before);
+
+    const opened = await _cwaGeminiNotebookMutationEvaluate(
+      debuggee,
+      _cwaGeminiNotebookClickVideoOverviewExpression()
+    );
+    if (opened?.clicked !== true) {
+      throw new Error(
+        "GEMINI_NOTEBOOK_VIDEO_CONFIG_OPEN_FAILED:" +
+          String(opened?.reason || "UNKNOWN")
+      );
+    }
+
+    await _cwaGeminiNotebookWaitForVideoConfig(debuggee, deadlineAt);
+
+    generationCommitMayHaveExecuted = true;
+    const committed = await _cwaGeminiNotebookMutationEvaluate(
+      debuggee,
+      _cwaGeminiNotebookClickVideoGenerateNowExpression()
+    );
+    if (committed?.clicked !== true) {
+      throw new Error(
+        "GEMINI_NOTEBOOK_VIDEO_GENERATE_CLICK_FAILED:" +
+          String(committed?.reason || "UNKNOWN")
+      );
+    }
+
+    const accepted = await _cwaGeminiNotebookWaitForStableArtifactDelta(
+      debuggee,
+      notebookUrl,
+      beforeArtifactRefs,
+      deadlineAt
+    );
+    const row = accepted.row;
+    const afterArtifactRefs = artifactRefs(accepted.state);
+
+    return {
+      productId: CWA_GEMINI_NOTEBOOK_PRODUCT_ID,
+      notebookUrl,
+      tabId: tab.id,
+      elapsedMs: Math.round(performance.now() - startedAt),
+      beforeArtifactRefs,
+      afterArtifactRefs,
+      generationCommitMayHaveExecuted: true,
+      generationAcceptedProven: true,
+      observedArtifactRef: String(row.observedArtifactRef),
+      artifactStatus:
+        row.statusCandidate === "PENDING_CANDIDATE"
+          ? "PENDING"
+          : "COMPLETION_CANDIDATE",
+      artifactTitle: String(row.title || ""),
+      artifactDetails: String(row.details || ""),
+      artifactIcons: Array.isArray(row.icons) ? row.icons : [],
+      startEvidence: "PAGE_DOM_BACKGROUND_VIDEO_ARTIFACT_ACCEPTED",
+      canonicalCompletionProven: false,
+      automaticRetry: false,
+      navigationPerformed: false
+    };
+  } catch (error) {
+    if (generationCommitMayHaveExecuted) {
+      throw _cwaGeminiNotebookAmbiguousError(error);
+    }
+    throw error;
+  } finally {
+    if (attached) {
+      try {
+        await chrome.debugger.detach(debuggee);
+      } catch {
+        // Detach cannot change the already-classified generation outcome.
+      }
+    }
+  }
+}
+
+
+async function _cwaGeminiNotebookWaitForStableExactArtifact(
+  debuggee,
+  notebookUrl,
+  expectedArtifactRef,
+  deadlineAt
+) {
+  let stableSignature = null;
+  let stableSince = null;
+  let lastRowCount = -1;
+  let lastMatchCount = -1;
+
+  while (performance.now() < deadlineAt) {
+    const state = await _cwaGeminiNotebookMutationEvaluate(
+      debuggee,
+      _cwaGeminiNotebookAudioArtifactItemsExpression()
+    );
+    if (state?.notebookUrl !== notebookUrl) {
+      throw new Error("GEMINI_NOTEBOOK_EXACT_ARTIFACT_ROUTE_CHANGED");
+    }
+    if (
+      state?.studioFound !== true ||
+      state?.containerFound !== true ||
+      state?.libraryFound !== true
+    ) {
+      throw new Error("GEMINI_NOTEBOOK_EXACT_ARTIFACT_LIBRARY_NOT_READY");
+    }
+
+    const rows = Array.isArray(state?.rows) ? state.rows : [];
+    lastRowCount = rows.length;
+    const matches = rows.filter(
+      (row) =>
+        String(row?.observedArtifactRef || "") === expectedArtifactRef
+    );
+    lastMatchCount = matches.length;
+
+    if (matches.length > 1) {
+      throw new Error(
+        "GEMINI_NOTEBOOK_EXACT_ARTIFACT_IDENTITY_AMBIGUOUS:" +
+          String(matches.length)
+      );
+    }
+    if (matches.length === 0) {
+      stableSignature = null;
+      stableSince = null;
+      await sleep(200);
+      continue;
+    }
+
+    const row = matches[0];
+    if (
+      row.statusCandidate !== "PENDING_CANDIDATE" &&
+      row.statusCandidate !== "NON_PENDING_CANDIDATE"
+    ) {
+      stableSignature = null;
+      stableSince = null;
+      await sleep(200);
+      continue;
+    }
+
+    const signature = JSON.stringify({
+      observedArtifactRef: row.observedArtifactRef,
+      statusCandidate: row.statusCandidate,
+      actionDisabled: row.actionDisabled,
+      icons: row.icons
+    });
+    if (signature !== stableSignature) {
+      stableSignature = signature;
+      stableSince = performance.now();
+    } else if (
+      stableSince !== null &&
+      performance.now() - stableSince >=
+        CWA_GEMINI_NOTEBOOK_AUDIO_OBSERVATION_STABLE_MS
+    ) {
+      return { state, row };
+    }
+    await sleep(200);
+  }
+
+  throw new Error(
+    "GEMINI_NOTEBOOK_EXACT_ARTIFACT_STABLE_TIMEOUT:rows=" +
+      String(lastRowCount) +
+      ":matches=" +
+      String(lastMatchCount)
+  );
+}
+
+async function _cwaGeminiNotebookProbeVideoArtifactObservation(message) {
+  if (message?.productId !== CWA_GEMINI_NOTEBOOK_PRODUCT_ID) {
+    throw new Error("GEMINI_NOTEBOOK_PRODUCT_ID_MISMATCH");
+  }
+
+  const notebookUrl = _cwaGeminiNotebookCanonicalNotebookUrl(
+    message?.notebookUrl
+  );
+  if (!notebookUrl) {
+    throw new Error("GEMINI_NOTEBOOK_NOTEBOOK_URL_INVALID");
+  }
+
+  const observedArtifactRef =
+    typeof message?.observedArtifactRef === "string" &&
+    /^[A-Za-z0-9_-]{8,200}$/.test(message.observedArtifactRef)
+      ? message.observedArtifactRef
+      : null;
+  if (!observedArtifactRef) {
+    throw new Error("GEMINI_NOTEBOOK_VIDEO_ARTIFACT_REF_INVALID");
+  }
+
+  const timeoutMs = Math.max(
+    5000,
+    Math.min(Number(message?.timeoutMs) || 60000, 120000)
+  );
+  const startedAt = performance.now();
+  const deadlineAt = startedAt + timeoutMs;
+  const tab = await _cwaGeminiNotebookFindExactOpenTab(notebookUrl);
+  const debuggee = { tabId: tab.id };
+  let attached = false;
+
+  try {
+    await chrome.debugger.attach(debuggee, CDP_PROTOCOL_VERSION);
+    attached = true;
+    await _cwaBaseSendCommand(debuggee, "Runtime.enable");
+
+    const beforeReload = await _cwaGeminiNotebookWaitForStableExactArtifact(
+      debuggee,
+      notebookUrl,
+      observedArtifactRef,
+      deadlineAt
+    );
+    const firstRow = beforeReload.row;
+
+    if (firstRow.statusCandidate === "PENDING_CANDIDATE") {
+      return {
+        productId: CWA_GEMINI_NOTEBOOK_PRODUCT_ID,
+        notebookUrl,
+        tabId: tab.id,
+        elapsedMs: Math.round(performance.now() - startedAt),
+        observedArtifactRef,
+        artifactStatus: "PENDING",
+        artifactTitle: String(firstRow.title || ""),
+        artifactDetails: String(firstRow.details || ""),
+        artifactIcons: Array.isArray(firstRow.icons) ? firstRow.icons : [],
+        completionProven: false,
+        reloadVerified: false,
+        finalityEvidence: CWA_GEMINI_NOTEBOOK_VIDEO_PENDING_EVIDENCE,
+        canonicalCompletionProven: false,
+        automaticRetry: false,
+        writePerformed: false,
+        navigationPerformed: false
+      };
+    }
+
+    await chrome.debugger.detach(debuggee);
+    attached = false;
+
+    const reloadBudget = Math.max(
+      3000,
+      Math.min(45000, deadlineAt - performance.now())
+    );
+    await _cwaGeminiNotebookReloadExactNotebookTab(
+      tab.id,
+      notebookUrl,
+      reloadBudget
+    );
+
+    await chrome.debugger.attach(debuggee, CDP_PROTOCOL_VERSION);
+    attached = true;
+    await _cwaBaseSendCommand(debuggee, "Runtime.enable");
+
+    const afterReload = await _cwaGeminiNotebookWaitForStableExactArtifact(
+      debuggee,
+      notebookUrl,
+      observedArtifactRef,
+      deadlineAt
+    );
+    const durableRow = afterReload.row;
+    if (durableRow.statusCandidate !== "NON_PENDING_CANDIDATE") {
+      throw new Error(
+        "GEMINI_NOTEBOOK_VIDEO_DURABLE_COMPLETION_NOT_CONFIRMED"
+      );
+    }
+
+    return {
+      productId: CWA_GEMINI_NOTEBOOK_PRODUCT_ID,
+      notebookUrl,
+      tabId: tab.id,
+      elapsedMs: Math.round(performance.now() - startedAt),
+      observedArtifactRef,
+      artifactStatus: "COMPLETED",
+      artifactTitle: String(durableRow.title || ""),
+      artifactDetails: String(durableRow.details || ""),
+      artifactIcons: Array.isArray(durableRow.icons)
+        ? durableRow.icons
+        : [],
+      completionProven: true,
+      reloadVerified: true,
+      finalityEvidence: CWA_GEMINI_NOTEBOOK_VIDEO_COMPLETION_FINALITY,
+      canonicalCompletionProven: false,
+      automaticRetry: false,
+      writePerformed: false,
+      navigationPerformed: true
+    };
+  } finally {
+    if (attached) {
+      try {
+        await chrome.debugger.detach(debuggee);
+      } catch {
+        // Observation is read-only; detach cannot change product finality.
+      }
+    }
+  }
+}
 
 function _cwaGeminiNotebookAudioArtifactItemsExpression() {
   return `(() => {
@@ -753,6 +1749,157 @@ async function _cwaGeminiNotebookProbeAudioArtifactMenu(message) {
 }
 
 
+
+async function _cwaGeminiNotebookProbeVideoArtifactMenu(message) {
+  if (message?.productId !== CWA_GEMINI_NOTEBOOK_PRODUCT_ID) {
+    throw new Error("GEMINI_NOTEBOOK_PRODUCT_ID_MISMATCH");
+  }
+
+  const notebookUrl = _cwaGeminiNotebookCanonicalNotebookUrl(
+    message?.notebookUrl
+  );
+  if (!notebookUrl) {
+    throw new Error("GEMINI_NOTEBOOK_NOTEBOOK_URL_INVALID");
+  }
+
+  const expectedArtifactRef =
+    typeof message?.expectedArtifactRef === "string" &&
+    /^[A-Za-z0-9_-]{8,200}$/.test(message.expectedArtifactRef)
+      ? message.expectedArtifactRef
+      : null;
+  if (!expectedArtifactRef) {
+    throw new Error("GEMINI_NOTEBOOK_VIDEO_ARTIFACT_REF_INVALID");
+  }
+
+  const timeoutMs = Math.max(
+    3000,
+    Math.min(Number(message?.timeoutMs) || 15000, 30000)
+  );
+  const startedAt = performance.now();
+  const deadlineAt = startedAt + timeoutMs;
+  const tab = await _cwaGeminiNotebookFindExactOpenTab(notebookUrl);
+  const debuggee = { tabId: tab.id };
+  let attached = false;
+  let menuClickPerformed = false;
+
+  try {
+    await chrome.debugger.attach(debuggee, CDP_PROTOCOL_VERSION);
+    attached = true;
+    await _cwaBaseSendCommand(debuggee, "Runtime.enable");
+
+    const exact = await _cwaGeminiNotebookWaitForStableExactArtifact(
+      debuggee,
+      notebookUrl,
+      expectedArtifactRef,
+      deadlineAt
+    );
+    if (exact?.row?.statusCandidate !== "NON_PENDING_CANDIDATE") {
+      throw new Error(
+        "GEMINI_NOTEBOOK_VIDEO_ARTIFACT_NOT_COMPLETED"
+      );
+    }
+
+    const beforeMenus = await _cwaGeminiNotebookMutationEvaluate(
+      debuggee,
+      _cwaGeminiNotebookVisibleArtifactMenusExpression()
+    );
+    const beforePanels = Array.isArray(beforeMenus?.panels)
+      ? beforeMenus.panels
+      : [];
+    if (beforePanels.length !== 0) {
+      throw new Error(
+        "GEMINI_NOTEBOOK_VIDEO_ARTIFACT_MENU_PRESTATE_NOT_EMPTY:" +
+          String(beforePanels.length)
+      );
+    }
+
+    menuClickPerformed = true;
+    const clicked = await _cwaGeminiNotebookMutationEvaluate(
+      debuggee,
+      _cwaGeminiNotebookClickExactArtifactMoreMenuExpression(
+        expectedArtifactRef
+      )
+    );
+    if (clicked?.clicked !== true) {
+      throw new Error(
+        "GEMINI_NOTEBOOK_VIDEO_ARTIFACT_MENU_CLICK_FAILED:" +
+          String(clicked?.reason || "UNKNOWN")
+      );
+    }
+
+    let observed = null;
+    while (performance.now() < deadlineAt) {
+      const state = await _cwaGeminiNotebookMutationEvaluate(
+        debuggee,
+        _cwaGeminiNotebookVisibleArtifactMenusExpression()
+      );
+      const panels = Array.isArray(state?.panels) ? state.panels : [];
+      if (panels.length > 1) {
+        throw new Error(
+          "GEMINI_NOTEBOOK_VIDEO_ARTIFACT_MENU_IDENTITY_AMBIGUOUS:" +
+            String(panels.length)
+        );
+      }
+      if (panels.length === 1 && Array.isArray(panels[0]?.items)) {
+        observed = panels[0];
+        break;
+      }
+      await sleep(100);
+    }
+
+    if (!observed) {
+      throw new Error("GEMINI_NOTEBOOK_VIDEO_ARTIFACT_MENU_TIMEOUT");
+    }
+
+    const downloadCandidates = observed.items.filter(
+      (item) =>
+        item?.tag === "button" &&
+        item?.role === "menuitem" &&
+        item?.disabled === false &&
+        String(item?.className || "").includes("mat-mdc-menu-item") &&
+        Array.isArray(item?.icons) &&
+        item.icons.includes("save_alt")
+    );
+
+    return {
+      productId: CWA_GEMINI_NOTEBOOK_PRODUCT_ID,
+      notebookUrl,
+      tabId: tab.id,
+      elapsedMs: Math.round(performance.now() - startedAt),
+      observedArtifactRef: expectedArtifactRef,
+      artifactTitle: String(exact.row.title || ""),
+      artifactDetails: String(exact.row.details || ""),
+      artifactIcons: Array.isArray(exact.row.icons) ? exact.row.icons : [],
+      menuTriggerAriaControls: String(clicked?.ariaControls || ""),
+      menuTriggerAriaExpanded: String(clicked?.ariaExpanded || ""),
+      menu: observed,
+      downloadCandidateCount: downloadCandidates.length,
+      downloadActionStructurallyProven: downloadCandidates.length === 1,
+      menuClickPerformed: true,
+      productWritePerformed: false,
+      navigationPerformed: false,
+      downloadPerformed: false,
+      rawDomExported: false
+    };
+  } catch (error) {
+    if (menuClickPerformed) {
+      throw new Error(
+        "GEMINI_NOTEBOOK_VIDEO_ARTIFACT_MENU_OBSERVATION_FAILED_AFTER_CLICK:" +
+          String(error instanceof Error ? error.message : error)
+      );
+    }
+    throw error;
+  } finally {
+    if (attached) {
+      try {
+        await chrome.debugger.detach(debuggee);
+      } catch {
+        // Menu-open characterization has no durable product effect.
+      }
+    }
+  }
+}
+
 function _cwaGeminiNotebookClickVisibleArtifactDownloadExpression() {
   return `(() => {
     const visible = (element) => {
@@ -1087,7 +2234,8 @@ function _cwaGeminiNotebookBytesToBase64(bytes) {
 async function _cwaGeminiNotebookLoadLocatorBytes(
   debuggee,
   locator,
-  maxBytes
+  maxBytes,
+  mediaFamily = "audio"
 ) {
   let streamHandle = null;
 
@@ -1158,8 +2306,10 @@ async function _cwaGeminiNotebookLoadLocatorBytes(
     .split(";")[0]
     .trim()
     .toLowerCase();
+  const expectedMediaPrefix =
+    mediaFamily === "video" ? "video/" : "audio/";
   const mediaLike =
-    normalizedContentType.startsWith("audio/") ||
+    normalizedContentType.startsWith(expectedMediaPrefix) ||
     normalizedContentType === "application/octet-stream" ||
     normalizedContentType === "binary/octet-stream";
   if (!mediaLike) {
@@ -1427,7 +2577,8 @@ async function _cwaGeminiNotebookProbeAudioArtifactBytes(message, port) {
     const acquired = await _cwaGeminiNotebookLoadLocatorBytes(
       debuggee,
       policy.locator,
-      maxBytes
+      maxBytes,
+      "audio"
     );
 
     const bodyBase64 = acquired.bodyBase64;
@@ -1885,6 +3036,665 @@ async function _cwaGeminiNotebookProbeAudioArtifactDownloadIntent(message) {
       } catch {
         // Detach cannot change the already-classified download intent.
       }
+    }
+  }
+}
+
+
+async function _cwaGeminiNotebookProbeVideoArtifactDownloadIntent(message) {
+  if (message?.productId !== CWA_GEMINI_NOTEBOOK_PRODUCT_ID) {
+    throw new Error("GEMINI_NOTEBOOK_PRODUCT_ID_MISMATCH");
+  }
+
+  const notebookUrl = _cwaGeminiNotebookCanonicalNotebookUrl(
+    message?.notebookUrl
+  );
+  if (!notebookUrl) {
+    throw new Error("GEMINI_NOTEBOOK_NOTEBOOK_URL_INVALID");
+  }
+
+  const expectedArtifactRef =
+    typeof message?.expectedArtifactRef === "string" &&
+    /^[A-Za-z0-9_-]{8,200}$/.test(message.expectedArtifactRef)
+      ? message.expectedArtifactRef
+      : null;
+  if (!expectedArtifactRef) {
+    throw new Error("GEMINI_NOTEBOOK_VIDEO_ARTIFACT_REF_INVALID");
+  }
+
+  const timeoutMs = Math.max(
+    3000,
+    Math.min(Number(message?.timeoutMs) || 15000, 30000)
+  );
+  const startedAt = performance.now();
+  const deadlineAt = startedAt + timeoutMs;
+  const tab = await _cwaGeminiNotebookFindExactOpenTab(notebookUrl);
+  const debuggee = { tabId: tab.id };
+  let attached = false;
+  let listenerInstalled = false;
+  let fetchEnabled = false;
+  let sinkProbeInstalled = false;
+  let downloadAttemptMayHaveExecuted = false;
+  const observedResponses = [];
+  const payloadCandidates = [];
+  const pendingHandlers = new Set();
+
+  const responseHeader = (params, name) => {
+    const wanted = String(name || "").toLowerCase();
+    const headers = Array.isArray(params?.responseHeaders)
+      ? params.responseHeaders
+      : [];
+    return headers
+      .filter(
+        (header) =>
+          String(header?.name || "").toLowerCase() === wanted
+      )
+      .map((header) => String(header?.value || ""))
+      .join("\n");
+  };
+
+  const sanitizeUrl = (value) => {
+    try {
+      const parsed = new URL(String(value || ""));
+      return {
+        origin: parsed.origin,
+        hasQuery: Boolean(parsed.search),
+        pathSuffix: String(parsed.pathname || "")
+          .split("/")
+          .filter(Boolean)
+          .slice(-2)
+      };
+    } catch {
+      return { origin: "", hasQuery: false, pathSuffix: [] };
+    }
+  };
+
+  const continuePaused = async (requestId) => {
+    try {
+      await _cwaBaseSendCommand(debuggee, "Fetch.continueResponse", {
+        requestId
+      });
+    } catch {
+      await _cwaBaseSendCommand(debuggee, "Fetch.continueRequest", {
+        requestId
+      });
+    }
+  };
+
+  const handlePaused = async (params) => {
+    const requestId = String(params?.requestId || "");
+    if (!requestId) return;
+
+    if (!downloadAttemptMayHaveExecuted) {
+      await continuePaused(requestId);
+      return;
+    }
+
+    const contentDisposition = responseHeader(params, "content-disposition");
+    const contentType = responseHeader(params, "content-type");
+    const normalizedContentType = String(contentType || "")
+      .split(";")[0]
+      .trim()
+      .toLowerCase();
+    const attachmentLike = /attachment/i.test(contentDisposition);
+    const url = sanitizeUrl(params?.request?.url || "");
+    const jsonLike =
+      normalizedContentType === "application/json" ||
+      normalizedContentType.endsWith("+json");
+    const controlPlaneLikely =
+      jsonLike &&
+      attachmentLike &&
+      String(params?.resourceType || "") === "XHR";
+    const mediaLike =
+      normalizedContentType.startsWith("video/") ||
+      normalizedContentType === "application/octet-stream" ||
+      normalizedContentType === "binary/octet-stream";
+    const payloadCandidate =
+      !controlPlaneLikely && (mediaLike || attachmentLike);
+
+    const summary = {
+      requestId,
+      responseStatusCode: Number.isFinite(params?.responseStatusCode)
+        ? Number(params.responseStatusCode)
+        : null,
+      resourceType: String(params?.resourceType || ""),
+      contentDispositionPresent: Boolean(contentDisposition),
+      contentDispositionAttachment: attachmentLike,
+      contentType: String(contentType || "").slice(0, 160),
+      normalizedContentType,
+      urlOrigin: url.origin,
+      urlHasQuery: url.hasQuery,
+      urlPathSuffix: url.pathSuffix,
+      controlPlaneLikely,
+      payloadCandidate,
+      blocked: payloadCandidate
+    };
+    if (observedResponses.length < 16) {
+      observedResponses.push(summary);
+    }
+
+    if (!payloadCandidate) {
+      await continuePaused(requestId);
+      return;
+    }
+
+    payloadCandidates.push(summary);
+    try {
+      await _cwaBaseSendCommand(debuggee, "Fetch.failRequest", {
+        requestId,
+        errorReason: "Aborted"
+      });
+    } catch {
+      // Outer ambiguity handling forbids retry after the effect boundary.
+    }
+  };
+
+  const observer = (source, method, params) => {
+    if (source?.tabId !== tab.id || method !== "Fetch.requestPaused") return;
+    const promise = handlePaused(params);
+    pendingHandlers.add(promise);
+    void promise.finally(() => pendingHandlers.delete(promise));
+  };
+
+  try {
+    await chrome.debugger.attach(debuggee, CDP_PROTOCOL_VERSION);
+    attached = true;
+    await _cwaBaseSendCommand(debuggee, "Runtime.enable");
+
+    const exact = await _cwaGeminiNotebookWaitForStableExactArtifact(
+      debuggee,
+      notebookUrl,
+      expectedArtifactRef,
+      deadlineAt
+    );
+    if (exact?.row?.statusCandidate !== "NON_PENDING_CANDIDATE") {
+      throw new Error("GEMINI_NOTEBOOK_VIDEO_ARTIFACT_NOT_COMPLETED");
+    }
+
+    const beforeMenus = await _cwaGeminiNotebookMutationEvaluate(
+      debuggee,
+      _cwaGeminiNotebookVisibleArtifactMenusExpression()
+    );
+    const beforePanels = Array.isArray(beforeMenus?.panels)
+      ? beforeMenus.panels
+      : [];
+    if (beforePanels.length !== 0) {
+      throw new Error(
+        "GEMINI_NOTEBOOK_VIDEO_ARTIFACT_DOWNLOAD_PRESTATE_MENU_OPEN:" +
+          String(beforePanels.length)
+      );
+    }
+
+    const opened = await _cwaGeminiNotebookMutationEvaluate(
+      debuggee,
+      _cwaGeminiNotebookClickExactArtifactMoreMenuExpression(
+        expectedArtifactRef
+      )
+    );
+    if (opened?.clicked !== true) {
+      throw new Error(
+        "GEMINI_NOTEBOOK_VIDEO_ARTIFACT_MENU_CLICK_FAILED:" +
+          String(opened?.reason || "UNKNOWN")
+      );
+    }
+
+    let menu = null;
+    while (performance.now() < deadlineAt) {
+      const state = await _cwaGeminiNotebookMutationEvaluate(
+        debuggee,
+        _cwaGeminiNotebookVisibleArtifactMenusExpression()
+      );
+      const panels = Array.isArray(state?.panels) ? state.panels : [];
+      if (panels.length > 1) {
+        throw new Error(
+          "GEMINI_NOTEBOOK_VIDEO_ARTIFACT_MENU_IDENTITY_AMBIGUOUS:" +
+            String(panels.length)
+        );
+      }
+      if (panels.length === 1) {
+        menu = panels[0];
+        break;
+      }
+      await sleep(100);
+    }
+    if (!menu) {
+      throw new Error("GEMINI_NOTEBOOK_VIDEO_ARTIFACT_MENU_TIMEOUT");
+    }
+
+    const downloadCandidates = Array.isArray(menu?.items)
+      ? menu.items.filter(
+          (item) =>
+            item?.tag === "button" &&
+            item?.role === "menuitem" &&
+            item?.disabled === false &&
+            String(item?.className || "").includes("mat-mdc-menu-item") &&
+            Array.isArray(item?.icons) &&
+            item.icons.includes("save_alt")
+        )
+      : [];
+    if (downloadCandidates.length !== 1) {
+      throw new Error(
+        "GEMINI_NOTEBOOK_VIDEO_ARTIFACT_DOWNLOAD_ACTION_IDENTITY_UNRESOLVED:" +
+          String(downloadCandidates.length)
+      );
+    }
+
+    const sinkInstall = await _cwaGeminiNotebookMutationEvaluate(
+      debuggee,
+      _cwaGeminiNotebookInstallDownloadSinkProbeExpression()
+    );
+    if (sinkInstall?.installed !== true) {
+      throw new Error(
+        "GEMINI_NOTEBOOK_VIDEO_ARTIFACT_DOWNLOAD_SINK_PROBE_INSTALL_FAILED"
+      );
+    }
+    sinkProbeInstalled = true;
+
+    chrome.debugger.onEvent.addListener(observer);
+    listenerInstalled = true;
+    await _cwaBaseSendCommand(debuggee, "Fetch.enable", {
+      patterns: [{ urlPattern: "*", requestStage: "Response" }]
+    });
+    fetchEnabled = true;
+
+    downloadAttemptMayHaveExecuted = true;
+    const clicked = await _cwaGeminiNotebookMutationEvaluate(
+      debuggee,
+      _cwaGeminiNotebookClickVisibleArtifactDownloadExpression()
+    );
+    if (clicked?.clicked !== true) {
+      throw new Error(
+        "GEMINI_NOTEBOOK_VIDEO_ARTIFACT_DOWNLOAD_CLICK_FAILED:" +
+          String(clicked?.reason || "UNKNOWN")
+      );
+    }
+
+    let sinkState = { installed: true, events: [] };
+    while (performance.now() < deadlineAt) {
+      sinkState = await _cwaGeminiNotebookMutationEvaluate(
+        debuggee,
+        _cwaGeminiNotebookReadDownloadSinkProbeExpression()
+      );
+      const sinkEvents = Array.isArray(sinkState?.events)
+        ? sinkState.events
+        : [];
+      if (payloadCandidates.length > 0 || sinkEvents.length > 0) break;
+      await sleep(50);
+    }
+
+    await Promise.allSettled(Array.from(pendingHandlers));
+
+    sinkState = await _cwaGeminiNotebookMutationEvaluate(
+      debuggee,
+      _cwaGeminiNotebookReadDownloadSinkProbeExpression()
+    );
+    const sinkEvents = Array.isArray(sinkState?.events)
+      ? sinkState.events
+      : [];
+
+    if (payloadCandidates.length > 1) {
+      throw new Error(
+        "GEMINI_NOTEBOOK_VIDEO_ARTIFACT_PAYLOAD_RESPONSE_AMBIGUOUS:" +
+          String(payloadCandidates.length)
+      );
+    }
+
+    const candidate =
+      payloadCandidates.length === 1 ? payloadCandidates[0] : null;
+
+    return {
+      productId: CWA_GEMINI_NOTEBOOK_PRODUCT_ID,
+      notebookUrl,
+      tabId: tab.id,
+      elapsedMs: Math.round(performance.now() - startedAt),
+      observedArtifactRef: expectedArtifactRef,
+      artifactTitle: String(exact.row.title || ""),
+      artifactDetails: String(exact.row.details || ""),
+      artifactIcons: Array.isArray(exact.row.icons) ? exact.row.icons : [],
+      downloadAttemptMayHaveExecuted: true,
+      downloadClickPerformed: true,
+      payloadResponseObserved: candidate !== null,
+      fetchRequestId: candidate ? candidate.requestId : "",
+      responseStatusCode: candidate
+        ? candidate.responseStatusCode
+        : null,
+      resourceType: candidate ? candidate.resourceType : "",
+      contentDispositionPresent: candidate
+        ? candidate.contentDispositionPresent
+        : false,
+      contentDispositionAttachment: candidate
+        ? candidate.contentDispositionAttachment
+        : false,
+      contentType: candidate ? candidate.contentType : "",
+      normalizedContentType: candidate
+        ? candidate.normalizedContentType
+        : "",
+      downloadUrlOrigin: candidate ? candidate.urlOrigin : "",
+      downloadUrlHasQuery: candidate ? candidate.urlHasQuery : false,
+      downloadUrlPathSuffix: candidate ? candidate.urlPathSuffix : [],
+      observedResponses,
+      downloadSinkObserved: sinkEvents.length > 0,
+      downloadSinkEvents: sinkEvents,
+      downloadSinkWindowOpenPatched: sinkInstall.windowOpenPatched === true,
+      downloadSinkObjectUrlPatched: sinkInstall.objectUrlPatched === true,
+      responseBlockedBeforeBody: candidate !== null,
+      responseBodyRead: false,
+      filesystemArtifactProven: false,
+      productWritePerformed: false,
+      navigationPerformed: false,
+      automaticRetry: false,
+      rawDownloadUrlExported: false
+    };
+  } catch (error) {
+    if (downloadAttemptMayHaveExecuted) {
+      throw _cwaGeminiNotebookAmbiguousError(error);
+    }
+    throw error;
+  } finally {
+    if (sinkProbeInstalled && attached) {
+      try {
+        await _cwaGeminiNotebookMutationEvaluate(
+          debuggee,
+          _cwaGeminiNotebookRestoreDownloadSinkProbeExpression()
+        );
+      } catch {
+        // Probe cleanup cannot grant retry authority.
+      }
+    }
+    if (fetchEnabled) {
+      try {
+        await _cwaBaseSendCommand(debuggee, "Fetch.disable");
+      } catch {
+        // Cleanup cannot grant retry authority.
+      }
+    }
+    if (listenerInstalled) {
+      try {
+        chrome.debugger.onEvent.removeListener(observer);
+      } catch {
+        // Listener cleanup cannot change the already-classified outcome.
+      }
+    }
+    if (attached) {
+      try {
+        await chrome.debugger.detach(debuggee);
+      } catch {
+        // Detach cannot change the already-classified download intent.
+      }
+    }
+  }
+}
+
+async function _cwaGeminiNotebookProbeVideoArtifactBytes(message, port) {
+  if (message?.productId !== CWA_GEMINI_NOTEBOOK_PRODUCT_ID) {
+    throw new Error("GEMINI_NOTEBOOK_PRODUCT_ID_MISMATCH");
+  }
+
+  const notebookUrl = _cwaGeminiNotebookCanonicalNotebookUrl(
+    message?.notebookUrl
+  );
+  if (!notebookUrl) {
+    throw new Error("GEMINI_NOTEBOOK_NOTEBOOK_URL_INVALID");
+  }
+
+  const expectedArtifactRef =
+    typeof message?.expectedArtifactRef === "string" &&
+    /^[A-Za-z0-9_-]{8,200}$/.test(message.expectedArtifactRef)
+      ? message.expectedArtifactRef
+      : null;
+  if (!expectedArtifactRef) {
+    throw new Error("GEMINI_NOTEBOOK_VIDEO_ARTIFACT_REF_INVALID");
+  }
+
+  const maxBytes = Math.max(
+    1,
+    Math.min(
+      Number(message?.maxBytes) || 67_108_864,
+      67_108_864
+    )
+  );
+  const timeoutMs = Math.max(
+    5000,
+    Math.min(Number(message?.timeoutMs) || 120000, 180000)
+  );
+  const startedAt = performance.now();
+  const deadlineAt = startedAt + timeoutMs;
+  const tab = await _cwaGeminiNotebookFindExactOpenTab(notebookUrl);
+  const debuggee = { tabId: tab.id };
+  let attached = false;
+  let sinkProbeInstalled = false;
+  let downloadAttemptMayHaveExecuted = false;
+
+  try {
+    await chrome.debugger.attach(debuggee, CDP_PROTOCOL_VERSION);
+    attached = true;
+    await _cwaBaseSendCommand(debuggee, "Runtime.enable");
+
+    const exact = await _cwaGeminiNotebookWaitForStableExactArtifact(
+      debuggee,
+      notebookUrl,
+      expectedArtifactRef,
+      deadlineAt
+    );
+    if (exact?.row?.statusCandidate !== "NON_PENDING_CANDIDATE") {
+      throw new Error("GEMINI_NOTEBOOK_VIDEO_ARTIFACT_NOT_COMPLETED");
+    }
+
+    const beforeMenus = await _cwaGeminiNotebookMutationEvaluate(
+      debuggee,
+      _cwaGeminiNotebookVisibleArtifactMenusExpression()
+    );
+    const beforePanels = Array.isArray(beforeMenus?.panels)
+      ? beforeMenus.panels
+      : [];
+    if (beforePanels.length !== 0) {
+      throw new Error(
+        "GEMINI_NOTEBOOK_VIDEO_ARTIFACT_BYTE_PRESTATE_MENU_OPEN:" +
+          String(beforePanels.length)
+      );
+    }
+
+    const opened = await _cwaGeminiNotebookMutationEvaluate(
+      debuggee,
+      _cwaGeminiNotebookClickExactArtifactMoreMenuExpression(
+        expectedArtifactRef
+      )
+    );
+    if (opened?.clicked !== true) {
+      throw new Error(
+        "GEMINI_NOTEBOOK_VIDEO_ARTIFACT_MENU_CLICK_FAILED:" +
+          String(opened?.reason || "UNKNOWN")
+      );
+    }
+
+    let menu = null;
+    while (performance.now() < deadlineAt) {
+      const state = await _cwaGeminiNotebookMutationEvaluate(
+        debuggee,
+        _cwaGeminiNotebookVisibleArtifactMenusExpression()
+      );
+      const panels = Array.isArray(state?.panels) ? state.panels : [];
+      if (panels.length > 1) {
+        throw new Error(
+          "GEMINI_NOTEBOOK_VIDEO_ARTIFACT_MENU_IDENTITY_AMBIGUOUS:" +
+            String(panels.length)
+        );
+      }
+      if (panels.length === 1) {
+        menu = panels[0];
+        break;
+      }
+      await sleep(100);
+    }
+    if (!menu) {
+      throw new Error("GEMINI_NOTEBOOK_VIDEO_ARTIFACT_MENU_TIMEOUT");
+    }
+
+    const downloadCandidates = Array.isArray(menu?.items)
+      ? menu.items.filter(
+          (item) =>
+            item?.tag === "button" &&
+            item?.role === "menuitem" &&
+            item?.disabled === false &&
+            String(item?.className || "").includes("mat-mdc-menu-item") &&
+            Array.isArray(item?.icons) &&
+            item.icons.includes("save_alt")
+        )
+      : [];
+    if (downloadCandidates.length !== 1) {
+      throw new Error(
+        "GEMINI_NOTEBOOK_VIDEO_ARTIFACT_DOWNLOAD_ACTION_IDENTITY_UNRESOLVED:" +
+          String(downloadCandidates.length)
+      );
+    }
+
+    const sinkInstall = await _cwaGeminiNotebookMutationEvaluate(
+      debuggee,
+      _cwaGeminiNotebookInstallDownloadSinkProbeExpression()
+    );
+    if (
+      sinkInstall?.installed !== true ||
+      sinkInstall?.windowOpenPatched !== true
+    ) {
+      throw new Error(
+        "GEMINI_NOTEBOOK_VIDEO_ARTIFACT_BYTE_SINK_PROBE_INSTALL_FAILED"
+      );
+    }
+    sinkProbeInstalled = true;
+
+    downloadAttemptMayHaveExecuted = true;
+    const clicked = await _cwaGeminiNotebookMutationEvaluate(
+      debuggee,
+      _cwaGeminiNotebookClickVisibleArtifactDownloadExpression()
+    );
+    if (clicked?.clicked !== true) {
+      throw new Error(
+        "GEMINI_NOTEBOOK_VIDEO_ARTIFACT_DOWNLOAD_CLICK_FAILED:" +
+          String(clicked?.reason || "UNKNOWN")
+      );
+    }
+
+    let sinkState = { installed: true, events: [] };
+    while (performance.now() < deadlineAt) {
+      sinkState = await _cwaGeminiNotebookMutationEvaluate(
+        debuggee,
+        _cwaGeminiNotebookReadDownloadSinkProbeExpression()
+      );
+      const events = Array.isArray(sinkState?.events)
+        ? sinkState.events
+        : [];
+      if (events.some((event) => event?.kind === "window_open")) break;
+      await sleep(50);
+    }
+
+    const locatorState = await _cwaGeminiNotebookMutationEvaluate(
+      debuggee,
+      _cwaGeminiNotebookTakeUniqueWindowOpenLocatorExpression()
+    );
+    if (locatorState?.resolved !== true) {
+      throw new Error(
+        "GEMINI_NOTEBOOK_VIDEO_ARTIFACT_WINDOW_OPEN_LOCATOR_UNRESOLVED:" +
+          String(locatorState?.reason || "UNKNOWN")
+      );
+    }
+
+    const policy = _cwaGeminiNotebookAudioLocatorPolicy(
+      locatorState.locator
+    );
+
+    const acquired = await _cwaGeminiNotebookLoadLocatorBytes(
+      debuggee,
+      policy.locator,
+      maxBytes,
+      "video"
+    );
+
+    const bodyBase64 = acquired.bodyBase64;
+    if (
+      typeof bodyBase64 !== "string" ||
+      !/^[0-9a-f]{64}$/.test(acquired.sha256 || "")
+    ) {
+      throw new Error(
+        "GEMINI_NOTEBOOK_VIDEO_ARTIFACT_BYTE_TRANSFER_SOURCE_INVALID"
+      );
+    }
+
+    const chunkCount = Math.max(
+      1,
+      Math.ceil(
+        bodyBase64.length /
+          CWA_GEMINI_NOTEBOOK_VIDEO_BYTE_CHUNK_BASE64_CHARS
+      )
+    );
+
+    for (let chunkIndex = 0; chunkIndex < chunkCount; chunkIndex += 1) {
+      const data = bodyBase64.slice(
+        chunkIndex *
+          CWA_GEMINI_NOTEBOOK_VIDEO_BYTE_CHUNK_BASE64_CHARS,
+        (chunkIndex + 1) *
+          CWA_GEMINI_NOTEBOOK_VIDEO_BYTE_CHUNK_BASE64_CHARS
+      );
+      if (
+        !safePortPost(port, {
+          protocol: BRIDGE_PROTOCOL_VERSION,
+          type: CWA_GEMINI_NOTEBOOK_VIDEO_ARTIFACT_RETRIEVAL_CHUNK_TYPE,
+          request_id: message.request_id,
+          chunkIndex,
+          chunkCount,
+          totalBytes: acquired.totalBytes,
+          sha256: acquired.sha256,
+          data
+        })
+      ) {
+        throw new Error(
+          "GEMINI_NOTEBOOK_VIDEO_ARTIFACT_BYTE_CHUNK_DELIVERY_FAILED"
+        );
+      }
+    }
+
+    return {
+      productId: CWA_GEMINI_NOTEBOOK_PRODUCT_ID,
+      notebookUrl,
+      tabId: tab.id,
+      elapsedMs: Math.round(performance.now() - startedAt),
+      observedArtifactRef: expectedArtifactRef,
+      locatorOriginClass: policy.originClass,
+      responseStatusCode: acquired.responseStatusCode,
+      contentType: acquired.contentType,
+      normalizedContentType: acquired.normalizedContentType,
+      contentDispositionPresent: acquired.contentDispositionPresent,
+      totalBytes: acquired.totalBytes,
+      sha256: acquired.sha256,
+      chunkCount,
+      browserBytesProven: true,
+      networkResourceLoadProven:
+        acquired.networkResourceLoadProven === true,
+      authenticatedBrowserRequestProven: true,
+      mediaFamily: "video",
+      acquisitionTabCreated: false,
+      rawDownloadUrlExported: false,
+      privateProtocolBodyRead: false,
+      finalDestinationWritten: false,
+      automaticRetry: false
+    };
+  } catch (error) {
+    if (downloadAttemptMayHaveExecuted) {
+      throw _cwaGeminiNotebookAmbiguousError(error);
+    }
+    throw error;
+  } finally {
+    if (sinkProbeInstalled && attached) {
+      try {
+        await _cwaGeminiNotebookMutationEvaluate(
+          debuggee,
+          _cwaGeminiNotebookRestoreDownloadSinkProbeExpression()
+        );
+      } catch {}
+    }
+    if (attached) {
+      try {
+        await chrome.debugger.detach(debuggee);
+      } catch {}
     }
   }
 }
@@ -2982,7 +4792,10 @@ async function _cwaOnNativeMessageWithGeminiNotebook(
       CWA_GEMINI_NOTEBOOK_ADD_URL_SOURCE_OPERATION,
       CWA_GEMINI_NOTEBOOK_GENERATE_AUDIO_OVERVIEW_OPERATION,
       CWA_GEMINI_NOTEBOOK_OBSERVE_AUDIO_OVERVIEW_OPERATION,
-      CWA_GEMINI_NOTEBOOK_AUDIO_ARTIFACT_RETRIEVAL_OPERATION
+      CWA_GEMINI_NOTEBOOK_AUDIO_ARTIFACT_RETRIEVAL_OPERATION,
+      CWA_GEMINI_NOTEBOOK_VIDEO_GENERATION_OPERATION,
+      CWA_GEMINI_NOTEBOOK_VIDEO_ARTIFACT_OBSERVE_OPERATION,
+      CWA_GEMINI_NOTEBOOK_VIDEO_ARTIFACT_RETRIEVAL_OPERATION
     ].includes(operation)
   ) {
     return next(message, port);
@@ -2998,7 +4811,13 @@ async function _cwaOnNativeMessageWithGeminiNotebook(
         ? "gemini_notebook_observe_audio_overview_result"
         : operation === CWA_GEMINI_NOTEBOOK_AUDIO_ARTIFACT_RETRIEVAL_OPERATION
           ? "gemini_notebook_audio_artifact_retrieval_result"
-          : "gemini_notebook_add_url_source_result";
+          : operation === CWA_GEMINI_NOTEBOOK_VIDEO_GENERATION_OPERATION
+            ? "gemini_notebook_video_generation_result"
+            : operation === CWA_GEMINI_NOTEBOOK_VIDEO_ARTIFACT_OBSERVE_OPERATION
+              ? "gemini_notebook_video_artifact_observe_result"
+              : operation === CWA_GEMINI_NOTEBOOK_VIDEO_ARTIFACT_RETRIEVAL_OPERATION
+                ? "gemini_notebook_video_artifact_retrieval_result"
+                : "gemini_notebook_add_url_source_result";
 
   try {
     const result =
@@ -3008,7 +4827,13 @@ async function _cwaOnNativeMessageWithGeminiNotebook(
           ? await _cwaGeminiNotebookObserveAudioOverview(message)
           : operation === CWA_GEMINI_NOTEBOOK_AUDIO_ARTIFACT_RETRIEVAL_OPERATION
             ? await _cwaGeminiNotebookProbeAudioArtifactBytes(message, port)
-            : await _cwaGeminiNotebookAddUrlSource(message);
+            : operation === CWA_GEMINI_NOTEBOOK_VIDEO_GENERATION_OPERATION
+              ? await _cwaGeminiNotebookProbeVideoGeneration(message)
+              : operation === CWA_GEMINI_NOTEBOOK_VIDEO_ARTIFACT_OBSERVE_OPERATION
+                ? await _cwaGeminiNotebookProbeVideoArtifactObservation(message)
+                : operation === CWA_GEMINI_NOTEBOOK_VIDEO_ARTIFACT_RETRIEVAL_OPERATION
+                  ? await _cwaGeminiNotebookProbeVideoArtifactBytes(message, port)
+                  : await _cwaGeminiNotebookAddUrlSource(message);
     safePortPost(port, {
       protocol: BRIDGE_PROTOCOL_VERSION,
       type: responseType,

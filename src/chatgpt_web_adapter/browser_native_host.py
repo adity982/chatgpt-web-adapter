@@ -50,6 +50,7 @@ class _BrokerHandler(socketserver.BaseRequestHandler):
                 in {
                     "canonical_read",
                     "gemini_notebook_audio_artifact_retrieval",
+                    "gemini_notebook_video_artifact_retrieval",
                 }
                 else None,
             )
@@ -385,6 +386,9 @@ class BrowserNativeBroker:
             "gemini_notebook_generate_audio_overview",
             "gemini_notebook_observe_audio_overview",
             "gemini_notebook_audio_artifact_retrieval",
+            "gemini_notebook_video_generation",
+            "gemini_notebook_video_artifact_observe",
+            "gemini_notebook_video_artifact_retrieval",
             "canonical_read",
             "canonical_read_complete",
             "release_runtime_tab",
@@ -421,6 +425,9 @@ class BrowserNativeBroker:
                 "gemini_notebook_generate_audio_overview": 60_000,
                 "gemini_notebook_observe_audio_overview": 60_000,
                 "gemini_notebook_audio_artifact_retrieval": 120_000,
+                "gemini_notebook_video_generation": 60_000,
+                "gemini_notebook_video_artifact_observe": 60_000,
+                "gemini_notebook_video_artifact_retrieval": 120_000,
                 "canonical_read": 30_000,
                 "release_runtime_tab": 10_000,
             }[operation]
@@ -454,6 +461,13 @@ class BrowserNativeBroker:
                     if (
                         message.get("type")
                         == "gemini_notebook_audio_artifact_retrieval_chunk"
+                    ):
+                        if event_sink is not None:
+                            event_sink(message)
+                        continue
+                    if (
+                        message.get("type")
+                        == "gemini_notebook_video_artifact_retrieval_chunk"
                     ):
                         if event_sink is not None:
                             event_sink(message)
