@@ -21,16 +21,22 @@ function _pr88InstantEffortSupportConflict(message) {
   );
 }
 
-function _pr88InstantEffortSliderExpression(action) {
+function _pr88InstantEffortSliderExpression(action, returnElement = false) {
   return `(() => {
     const ACTION = ${JSON.stringify(action)};
+    const RETURN_ELEMENT = ${returnElement === true ? "true" : "false"};
     const normalize = (value) => String(value || '').trim().toLowerCase().replace(/[\\s_\\-]+/g, ' ');
     const effort = (value) => {
       const text = normalize(value);
       if (!text) return null;
-      if (/(^|\\b)(instant|мгновенно)(\\b|$)/.test(text)) return 'INSTANT';
-      if (/(^|\\b)(medium|средний)(\\b|$)/.test(text)) return 'MEDIUM';
-      if (/(^|\\b)(high|высокий)(\\b|$)/.test(text)) return 'HIGH';
+      const has = (token) =>
+        text === token ||
+        text.startsWith(token + ' ') ||
+        text.endsWith(' ' + token) ||
+        text.includes(' ' + token + ' ');
+      if (has('instant') || has('мгновенно')) return 'INSTANT';
+      if (has('medium') || has('средний')) return 'MEDIUM';
+      if (has('high') || has('высокий')) return 'HIGH';
       return null;
     };
     const visible = (el) => {
@@ -133,6 +139,7 @@ function _pr88InstantEffortSliderExpression(action) {
     }
 
     const slider = sliders[0];
+    if (RETURN_ELEMENT) return slider.el;
     let focusProven = document.activeElement === slider.el;
     if (ACTION === 'focus') {
       try { slider.el.focus({preventScroll:true}); }
@@ -223,16 +230,22 @@ async function _pr88InstantEffortWaitForSelected(debuggee, timeoutMs) {
 }
 
 
-function _pr88InstantEffortRelaxedSliderExpression(action) {
+function _pr88InstantEffortRelaxedSliderExpression(action, returnElement = false) {
   return `(() => {
     const ACTION = ${JSON.stringify(action)};
+    const RETURN_ELEMENT = ${returnElement === true ? "true" : "false"};
     const normalize = (value) => String(value || '').trim().toLowerCase().replace(/[\\s_\\-]+/g, ' ');
     const effort = (value) => {
       const text = normalize(value);
       if (!text) return null;
-      if (/(^|\\b)(instant|мгновенно)(\\b|$)/.test(text)) return 'INSTANT';
-      if (/(^|\\b)(medium|средний)(\\b|$)/.test(text)) return 'MEDIUM';
-      if (/(^|\\b)(high|высокий)(\\b|$)/.test(text)) return 'HIGH';
+      const has = (token) =>
+        text === token ||
+        text.startsWith(token + ' ') ||
+        text.endsWith(' ' + token) ||
+        text.includes(' ' + token + ' ');
+      if (has('instant') || has('мгновенно')) return 'INSTANT';
+      if (has('medium') || has('средний')) return 'MEDIUM';
+      if (has('high') || has('высокий')) return 'HIGH';
       return null;
     };
     const visible = (el) => {
@@ -304,6 +317,7 @@ function _pr88InstantEffortRelaxedSliderExpression(action) {
       currentControlOpen:controlOpenObserved
     };
     const slider=sliders[0];
+    if(RETURN_ELEMENT) return slider.el;
     let focusProven=document.activeElement===slider.el;
     if(ACTION==='focus') {
       try { slider.el.focus({preventScroll:true}); } catch { try { slider.el.focus(); } catch {} }
@@ -333,10 +347,144 @@ async function _pr88InstantEffortRelaxedSliderSnapshot(debuggee, action='snapsho
     : {found:false,reason:'relaxed_slider_probe_failed',candidateCount:0,currentControlCount:0};
 }
 
+function _pr88InstantEffortExactSliderExpression(action, returnElement = false) {
+  return `(() => {
+    const ACTION=${JSON.stringify(action)};
+    const RETURN_ELEMENT=${returnElement === true ? "true" : "false"};
+    const visible=(el)=>{
+      if(!(el instanceof Element)) return false;
+      const r=el.getBoundingClientRect();
+      if(r.width<=0||r.height<=0) return false;
+      const s=getComputedStyle(el);
+      return s.display!=='none'&&s.visibility!=='hidden'&&s.opacity!=='0';
+    };
+    const num=(value)=>{
+      if(value===null||value===undefined||value==='') return null;
+      const parsed=Number(value);
+      return Number.isFinite(parsed)?parsed:null;
+    };
+    const modeFor=(now)=>now===0?'INSTANT':now===1?'MEDIUM':now===2?'HIGH':null;
+    const sliders=[];
+    for(const el of Array.from(
+      document.querySelectorAll('[role="slider"],input[type="range"]')
+    ).filter(visible)) {
+      const min=num(el.getAttribute('aria-valuemin'))??num(el.min);
+      const max=num(el.getAttribute('aria-valuemax'))??num(el.max);
+      const now=num(el.getAttribute('aria-valuenow'))??num(el.value);
+      if(!(
+        Number.isInteger(min)&&Number.isInteger(max)&&Number.isInteger(now)&&
+        min===0&&max===2&&now>=0&&now<=2
+      )) continue;
+      sliders.push({el,min,max,now});
+    }
+    if(sliders.length!==1) return {
+      found:false,
+      reason:sliders.length?'exact_slider_ambiguous':'exact_slider_missing',
+      candidateCount:sliders.length,
+      currentControlCount:0
+    };
+    const slider=sliders[0];
+    if(RETURN_ELEMENT) return slider.el;
+    let focusProven=document.activeElement===slider.el;
+    if(ACTION==='focus') {
+      try { slider.el.focus({preventScroll:true}); }
+      catch { try { slider.el.focus(); } catch {} }
+      focusProven=document.activeElement===slider.el;
+    }
+    return {
+      found:true,reason:null,candidateCount:1,currentControlCount:0,
+      currentMode:modeFor(slider.now),currentControlOpen:true,
+      currentControlOpenObserved:false,
+      openProofKind:'unique_exact_slider_value',
+      min:slider.min,max:slider.max,now:slider.now,stepCount:3,
+      disabled:Boolean(
+        slider.el.disabled===true||
+        slider.el.getAttribute('aria-disabled')==='true'
+      ),
+      pointerEventsEnabled:getComputedStyle(slider.el).pointerEvents!=='none',
+      focusProven
+    };
+  })()`;
+}
+
+async function _pr88InstantEffortExactSliderSnapshot(debuggee, action='snapshot') {
+  const result=await chrome.debugger.sendCommand(debuggee,'Runtime.evaluate',{
+    expression:_pr88InstantEffortExactSliderExpression(action),
+    returnByValue:true,
+    awaitPromise:true
+  });
+  const value=result?.result?.value;
+  return value&&typeof value==='object'
+    ? value
+    : {found:false,reason:'exact_slider_probe_failed',candidateCount:0,currentControlCount:0};
+}
+
 async function _pr88InstantEffortResolvedSliderSnapshot(debuggee, action='snapshot') {
+  const structuralReasons=new Set([
+    'quick_picker_not_open',
+    'composer_missing',
+    'current_effort_control_missing',
+    'effort_slider_missing'
+  ]);
+
   const primary=await _pr88InstantEffortSliderSnapshot(debuggee,action);
-  if(primary?.found===true||primary?.reason!=='quick_picker_not_open') return primary;
-  return _pr88InstantEffortRelaxedSliderSnapshot(debuggee,action);
+  if(primary?.found===true||!structuralReasons.has(primary?.reason)) return primary;
+
+  const relaxed=await _pr88InstantEffortRelaxedSliderSnapshot(debuggee,action);
+  if(relaxed?.found===true||!structuralReasons.has(relaxed?.reason)) return relaxed;
+
+  return _pr88InstantEffortExactSliderSnapshot(debuggee,action);
+}
+
+
+async function _pr88InstantEffortResolvedSliderRemoteObject(debuggee) {
+  const structuralReasons=new Set([
+    'quick_picker_not_open',
+    'composer_missing',
+    'current_effort_control_missing',
+    'effort_slider_missing'
+  ]);
+
+  let resolver='primary';
+  let snapshot=await _pr88InstantEffortSliderSnapshot(debuggee,'snapshot');
+  if(snapshot?.found!==true&&structuralReasons.has(snapshot?.reason)) {
+    resolver='relaxed';
+    snapshot=await _pr88InstantEffortRelaxedSliderSnapshot(debuggee,'snapshot');
+  }
+  if(snapshot?.found!==true&&structuralReasons.has(snapshot?.reason)) {
+    resolver='exact';
+    snapshot=await _pr88InstantEffortExactSliderSnapshot(debuggee,'snapshot');
+  }
+  if(snapshot?.found!==true) {
+    return {
+      found:false,
+      reason:snapshot?.reason||'resolved_slider_missing',
+      resolver,
+      snapshot,
+      objectId:null
+    };
+  }
+
+  const expression=resolver==='primary'
+    ? _pr88InstantEffortSliderExpression('snapshot',true)
+    : resolver==='relaxed'
+      ? _pr88InstantEffortRelaxedSliderExpression('snapshot',true)
+      : _pr88InstantEffortExactSliderExpression('snapshot',true);
+
+  const result=await chrome.debugger.sendCommand(debuggee,'Runtime.evaluate',{
+    expression,
+    returnByValue:false,
+    awaitPromise:true,
+    objectGroup:'pr17_2_resolved_slider_focus'
+  });
+  const objectId=result?.result?.objectId;
+  return {
+    found:typeof objectId==='string'&&Boolean(objectId),
+    reason:typeof objectId==='string'&&objectId?null:'resolved_slider_object_missing',
+    resolver,
+    snapshot,
+    objectId:typeof objectId==='string'?objectId:null
+  };
 }
 
 function _pr88InstantEffortTriggerExpression(action) {
@@ -346,9 +494,14 @@ function _pr88InstantEffortTriggerExpression(action) {
     const effort=(value)=>{
       const text=normalize(value);
       if(!text) return null;
-      if(/(^|\\b)(instant|мгновенно)(\\b|$)/.test(text)) return 'INSTANT';
-      if(/(^|\\b)(medium|средний)(\\b|$)/.test(text)) return 'MEDIUM';
-      if(/(^|\\b)(high|высокий)(\\b|$)/.test(text)) return 'HIGH';
+      const has=(token)=>
+        text===token||
+        text.startsWith(token+' ')||
+        text.endsWith(' '+token)||
+        text.includes(' '+token+' ');
+      if(has('instant')||has('мгновенно')) return 'INSTANT';
+      if(has('medium')||has('средний')) return 'MEDIUM';
+      if(has('high')||has('высокий')) return 'HIGH';
       return null;
     };
     const visible=(el)=>{
@@ -426,20 +579,33 @@ async function _pr88InstantEffortWaitForResolvedSlider(debuggee,expectedMode,tim
 async function _pr88InstantEffortWaitForResolvedSelected(debuggee,timeoutMs) {
   const startedAt=performance.now();
   let selected=null,slider=null,sliderMinReached=false,sliderObservedAfterHome=false;
+  let proofKind=null;
   while(performance.now()-startedAt<timeoutMs) {
     selected=await _pr88InstantSelectedModeSnapshot(debuggee);
     slider=await _pr88InstantEffortResolvedSliderSnapshot(debuggee,'snapshot');
     if(slider?.found===true) {
       sliderObservedAfterHome=true;
-      if(slider?.min===0&&slider?.now===slider?.min) sliderMinReached=true;
+      if(
+        slider?.min===0&&slider?.max===2&&slider?.stepCount===3&&
+        slider?.now===0&&slider?.currentMode==='INSTANT'
+      ) sliderMinReached=true;
     }
-    if(
-      selected?.selectedModeProven===true&&selected?.selectedMode==='INSTANT'&&
-      (sliderMinReached||slider?.found!==true)
-    ) return {selected,slider,sliderMinReached,sliderObservedAfterHome};
+    const selectedInstant=(
+      selected?.selectedModeProven===true&&selected?.selectedMode==='INSTANT'
+    );
+    if(sliderMinReached&&(selectedInstant||selected?.selectedModeProven!==true)) {
+      proofKind=selectedInstant
+        ? 'selected_mode_and_exact_slider'
+        : 'unique_exact_slider_value';
+      return {selected,slider,sliderMinReached,sliderObservedAfterHome,proofKind};
+    }
+    if(selectedInstant&&slider?.found!==true) {
+      proofKind='selected_mode_control';
+      return {selected,slider,sliderMinReached,sliderObservedAfterHome,proofKind};
+    }
     await sleep(PR88_INSTANT_EFFORT_SELECTION_POLL_MS);
   }
-  return {selected,slider,sliderMinReached,sliderObservedAfterHome};
+  return {selected,slider,sliderMinReached,sliderObservedAfterHome,proofKind};
 }
 
 
@@ -450,9 +616,14 @@ function _pr88InstantEffortDomTriggerClickExpression(expectedMode) {
     const effort=(value)=>{
       const text=normalize(value);
       if(!text) return null;
-      if(/(^|\\b)(instant|мгновенно)(\\b|$)/.test(text)) return 'INSTANT';
-      if(/(^|\\b)(medium|средний)(\\b|$)/.test(text)) return 'MEDIUM';
-      if(/(^|\\b)(high|высокий)(\\b|$)/.test(text)) return 'HIGH';
+      const has=(token)=>
+        text===token||
+        text.startsWith(token+' ')||
+        text.endsWith(' '+token)||
+        text.includes(' '+token+' ');
+      if(has('instant')||has('мгновенно')) return 'INSTANT';
+      if(has('medium')||has('средний')) return 'MEDIUM';
+      if(has('high')||has('высокий')) return 'HIGH';
       return null;
     };
     const visible=(el)=>{
@@ -462,8 +633,20 @@ function _pr88InstantEffortDomTriggerClickExpression(expectedMode) {
       const s=getComputedStyle(el);
       return s.display!=='none'&&s.visibility!=='hidden'&&s.opacity!=='0';
     };
-    const composer=['#prompt-textarea','[contenteditable="true"][data-lexical-editor="true"]','textarea[placeholder]']
-      .map((s)=>document.querySelector(s)).find((el)=>el&&visible(el));
+    const historicalComposer=[
+      '#prompt-textarea',
+      '[contenteditable="true"][data-lexical-editor="true"]',
+      'textarea[placeholder]'
+    ].map((s)=>document.querySelector(s)).find((el)=>el&&visible(el));
+    const semanticCandidates=historicalComposer?[]:Array.from(
+      document.querySelectorAll(
+        '[contenteditable="true"][role="textbox"][aria-multiline="true"]'
+      )
+    ).filter((candidate)=>
+      visible(candidate)&&candidate.closest('main')&&candidate.closest('form')
+    );
+    const composer=historicalComposer||
+      (semanticCandidates.length===1?semanticCandidates[0]:null);
     if(!composer) return {clicked:false,reason:'composer_missing',candidateCount:0};
     const cr=composer.getBoundingClientRect();
     const candidates=[];
@@ -673,14 +856,27 @@ async function _pr88SelectionEnsureInstantCore(debuggee, context) {
   context.effortSliderObservedAfterHome = settled?.sliderObservedAfterHome === true;
   context.effortSliderAriaValueNowAfter = Number.isFinite(sliderAfter?.now)
     ? sliderAfter.now : (context.effortSliderMinReachedProven ? 0 : null);
-  context.selectedModeAfterSelection = after?.selectedMode || null;
-  context.selectedModeAfterSelectionProven = after?.selectedModeProven === true;
-  context.selectedModeAfterSelectionProofKind = after?.proofKind || "unknown";
+  context.selectedModeAfterSelection =
+    after?.selectedModeProven === true
+      ? after.selectedMode
+      : sliderAfter?.currentMode || null;
+  context.selectedModeAfterSelectionProven = (
+    context.selectedModeAfterSelection === "INSTANT" &&
+    (
+      after?.selectedModeProven === true ||
+      settled?.sliderMinReached === true
+    )
+  );
+  context.selectedModeAfterSelectionProofKind =
+    settled?.proofKind || after?.proofKind || "unknown";
 
   if (context.unexpectedConversationWriteBeforeSelectionComplete === true) {
     throw new Error("PR8_8_INSTANT_EFFORT_CONVERSATION_WRITE_BEFORE_SELECTION");
   }
-  if (after?.selectedModeProven !== true || after?.selectedMode !== "INSTANT") {
+  if (
+    context.selectedModeAfterSelectionProven !== true ||
+    context.selectedModeAfterSelection !== "INSTANT"
+  ) {
     throw new Error("PR8_8_INSTANT_EFFORT_DID_NOT_SETTLE_TO_INSTANT");
   }
   if (settled?.sliderObservedAfterHome === true && settled?.sliderMinReached !== true) {
@@ -693,131 +889,21 @@ async function _pr88SelectionEnsureInstantCore(debuggee, context) {
 }
 
 
-async function _pr88InstantEffortDocumentVisible(debuggee) {
-  try {
-    const result = await chrome.debugger.sendCommand(debuggee, 'Runtime.evaluate', {
-      expression: `(() => ({visible:document.visibilityState==='visible' && document.hidden!==true}))()`,
-      returnByValue: true,
-      awaitPromise: true
-    });
-    return result?.result?.value?.visible === true;
-  } catch {
-    return false;
-  }
-}
-
-async function _pr88InstantEffortWaitForeground(debuggee, timeoutMs = 2500) {
-  const tabId = Number.isInteger(debuggee?.tabId) ? debuggee.tabId : null;
-  if (tabId === null) return false;
-  const startedAt = performance.now();
-  while (performance.now() - startedAt < timeoutMs) {
-    try {
-      const tab = await chrome.tabs.get(tabId);
-      if (tab?.active === true && await _pr88InstantEffortDocumentVisible(debuggee)) {
-        return true;
-      }
-    } catch {}
-    await sleep(PR88_INSTANT_EFFORT_SELECTION_POLL_MS);
-  }
-  return false;
-}
-
-async function _pr88InstantEffortRestorePriorTab(state) {
-  const result = {
-    attempted: false,
-    restored: state?.activated !== true,
-    priorTabPresent: Number.isInteger(state?.priorActiveTabId)
-  };
-  if (state?.activated !== true || !Number.isInteger(state?.priorActiveTabId)) {
-    return result;
-  }
-  result.attempted = true;
-  try {
-    const prior = await chrome.tabs.get(state.priorActiveTabId);
-    if (!prior || prior.windowId !== state.windowId) return result;
-    await chrome.tabs.update(state.priorActiveTabId, {active: true});
-    const startedAt = performance.now();
-    while (performance.now() - startedAt < 1500) {
-      const current = await chrome.tabs.get(state.priorActiveTabId);
-      if (current?.active === true) {
-        result.restored = true;
-        return result;
-      }
-      await sleep(PR88_INSTANT_EFFORT_SELECTION_POLL_MS);
-    }
-  } catch {}
+async function _pr88SelectionEnsureInstant(debuggee, context) {
+  context.instantEffortTransientForegroundRequested = false;
+  context.instantEffortTransientForegroundActivated = false;
+  context.instantEffortTransientForegroundProven = false;
+  context.instantEffortPriorActiveTabPresent = false;
+  context.instantEffortForegroundRestoreAttempted = false;
+  context.instantEffortForegroundRestoreProven = true;
+  context.instantEffortBackgroundSelectionAttempted = true;
+  const result = await _pr88SelectionEnsureInstantCore(debuggee, context);
+  context.instantEffortBackgroundSelectionProven =
+    context.selectionComplete === true &&
+    context.selectedModeAfterSelectionProven === true &&
+    context.selectedModeAfterSelection === "INSTANT";
   return result;
 }
-
-async function _pr88InstantEffortBeginTransientForeground(debuggee) {
-  const tabId = Number.isInteger(debuggee?.tabId) ? debuggee.tabId : null;
-  if (tabId === null) {
-    throw new Error('PR8_8_INSTANT_EFFORT_RUNTIME_TAB_REQUIRED');
-  }
-
-  const runtimeTab = await chrome.tabs.get(tabId);
-  const windowId = Number.isInteger(runtimeTab?.windowId) ? runtimeTab.windowId : null;
-  if (windowId === null) {
-    throw new Error('PR8_8_INSTANT_EFFORT_RUNTIME_WINDOW_REQUIRED');
-  }
-
-  let priorActiveTabId = null;
-  try {
-    const activeTabs = await chrome.tabs.query({active: true, windowId});
-    const prior = activeTabs.find((tab) => Number.isInteger(tab?.id) && tab.id !== tabId);
-    priorActiveTabId = Number.isInteger(prior?.id) ? prior.id : null;
-  } catch {}
-
-  const state = {
-    tabId,
-    windowId,
-    activated: runtimeTab?.active !== true,
-    priorActiveTabId,
-    foregroundProven: false
-  };
-
-  try {
-    if (state.activated) {
-      await chrome.tabs.update(tabId, {active: true});
-    }
-    state.foregroundProven = await _pr88InstantEffortWaitForeground(debuggee, 2500);
-    if (state.foregroundProven !== true) {
-      throw new Error('PR8_8_INSTANT_EFFORT_FOREGROUND_NOT_PROVEN');
-    }
-    // Give the product surface one bounded paint/event-loop turn after visibility.
-    await sleep(150);
-    return state;
-  } catch (error) {
-    await _pr88InstantEffortRestorePriorTab(state);
-    throw error;
-  }
-}
-
-async function _pr88SelectionEnsureInstant(debuggee, context) {
-    if (context?.selectionChecked === true) {
-      return _pr88SelectionEnsureInstantCore(debuggee, context);
-    }
-
-    const before = await _pr88InstantSelectedModeSnapshot(debuggee);
-    if (before?.selectedModeProven !== true || before?.selectedMode === 'INSTANT') {
-      return _pr88SelectionEnsureInstantCore(debuggee, context);
-    }
-
-    const foreground = await _pr88InstantEffortBeginTransientForeground(debuggee);
-    context.instantEffortTransientForegroundRequested = true;
-    context.instantEffortTransientForegroundActivated = foreground.activated === true;
-    context.instantEffortTransientForegroundProven = foreground.foregroundProven === true;
-    context.instantEffortPriorActiveTabPresent = Number.isInteger(foreground.priorActiveTabId);
-
-    try {
-      return await _pr88SelectionEnsureInstantCore(debuggee, context);
-    } finally {
-      const restored = await _pr88InstantEffortRestorePriorTab(foreground);
-      context.instantEffortForegroundRestoreAttempted = restored.attempted === true;
-      context.instantEffortForegroundRestoreProven = restored.restored === true;
-    }
-}
-
 
 function _pr88InstantEffortSupportDiagnosticMatches(message) {
   return message?.characterizeInstantEffortSelectionSupport === true;
@@ -835,6 +921,8 @@ async function _pr88HandleInstantEffortSupportDiagnostic(message) {
     quickPickerOnly: true,
     exactDiscreteRangeRequired: true,
     semanticHomeKeySelectionSupported: true,
+    backgroundSelectionSupported: true,
+    transientForegroundRequired: false,
     selectedInstantProofRequired: true,
     preInputFailureBoundaryPreserved: true,
     advancedPickerClickForbidden: true,

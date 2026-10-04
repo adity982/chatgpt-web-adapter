@@ -51,17 +51,15 @@ function _pr88SelectionPointExpression(kind) {
     const classify = (value) => {
       const text = normalize(value);
       if (!text) return null;
-      if (
-        text === 'instant' ||
-        text === 'мгновенно' ||
-        text.startsWith('instant ') ||
-        text.includes(' instant') ||
-        text.startsWith('мгновенно ') ||
-        text.includes(' мгновенно')
-      ) return 'INSTANT';
-      if (text === 'medium' || text === 'средний' || text.includes('thinking standard')) return 'MEDIUM';
-      if (text === 'extra high' || text === 'очень высокий' || text.includes('thinking heavy')) return 'EXTRA_HIGH';
-      if (text === 'high' || text === 'высокий' || text.includes('thinking extended')) return 'HIGH';
+      const has = (token) =>
+        text === token ||
+        text.startsWith(token + ' ') ||
+        text.endsWith(' ' + token) ||
+        text.includes(' ' + token + ' ');
+      if (has('instant') || has('мгновенно')) return 'INSTANT';
+      if (has('medium') || has('средний') || text.includes('thinking standard')) return 'MEDIUM';
+      if (has('extra high') || has('очень высокий') || text.includes('thinking heavy')) return 'EXTRA_HIGH';
+      if (has('high') || has('высокий') || text.includes('thinking extended')) return 'HIGH';
       if (text === 'pro standard') return 'PRO_STANDARD';
       if (text === 'pro extended') return 'PRO_EXTENDED';
       if (text === 'thinking') return 'REASONING_OTHER';
@@ -239,11 +237,55 @@ function _pr88SelectionInstallNetworkWindow(debuggee, context) {
   context.networkListener = listener;
 }
 
+function _pr88SelectionAdoptModelProfileSelection(context, owner) {
+  if (
+    owner?.requestedModelMode !== "INSTANT" ||
+    owner?.selectionComplete !== true ||
+    owner?.selectedModeAfterProven !== true ||
+    owner?.selectedModeAfter !== "INSTANT"
+  ) {
+    throw new Error("PR17_2_INSTANT_SELECTION_MODEL_PROFILE_HANDOFF_NOT_PROVEN");
+  }
+
+  context.selectionChecked = true;
+  context.selectionComplete = true;
+  context.selectionPerformed = owner.selectionPerformed === true;
+  context.selectionMechanism = owner.selectionMechanism || "NO_SELECTION_REQUIRED";
+  context.selectedModeBeforeSelection = owner.selectedModeBefore || null;
+  context.selectedModeBeforeSelectionProven = owner.selectedModeBeforeProven === true;
+  context.selectedModeBeforeSelectionProofKind =
+    owner.selectedModeBeforeProofKind || "model_profile_handoff";
+  context.selectedModeBeforeSelectionCandidateCount = Number.isInteger(
+    owner.selectedModeBeforeCandidateCount
+  )
+    ? owner.selectedModeBeforeCandidateCount
+    : 0;
+  context.selectedModeAfterSelection = "INSTANT";
+  context.selectedModeAfterSelectionProven = true;
+  context.selectedModeAfterSelectionProofKind =
+    owner.selectedModeAfterProofKind || "model_profile_handoff";
+  context.selectionElapsedMs = Number.isFinite(owner.selectionElapsedMs)
+    ? owner.selectionElapsedMs
+    : 0;
+  context.selectionMutationElapsedMs = context.selectionPerformed
+    ? context.selectionElapsedMs
+    : 0;
+}
+
 async function _pr88SelectionPrepareComposer(debuggee) {
   const context = _pr88SelectionContext;
-  if (context !== null) {
-    await _pr88SelectionEnsureInstant(debuggee, context);
+  if (context === null) return;
+
+  const modelProfileContext =
+    typeof _pr810ModelProfileContext !== "undefined"
+      ? _pr810ModelProfileContext
+      : null;
+  if (modelProfileContext !== null) {
+    _pr88SelectionAdoptModelProfileSelection(context, modelProfileContext);
+    return;
   }
+
+  await _pr88SelectionEnsureInstant(debuggee, context);
 }
 
 async function _pr88SelectionStoredRecord() {
