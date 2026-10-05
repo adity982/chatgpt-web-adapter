@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import threading
 from contextlib import nullcontext
 from functools import wraps
-import threading
 from typing import Any
 
 from .browser_authority_lease import (
@@ -90,7 +90,7 @@ _BROWSER_OWNED_CAPABILITY_STATES: dict[str, CapabilityState] = {
     MODEL_SELECTION: CapabilityState.AVAILABLE,
     MODEL_PRESERVATION: CapabilityState.UNKNOWN,
     REASONING_SELECTION: CapabilityState.AVAILABLE,
-    REASONING_PRESERVATION: CapabilityState.UNKNOWN,
+    REASONING_PRESERVATION: CapabilityState.AVAILABLE,
     PRODUCT_MEMORY_PERSONALIZATION: CapabilityState.UNKNOWN,
     TOOLS_CONNECTORS: CapabilityState.UNKNOWN,
     APPROVALS: CapabilityState.UNIMPLEMENTED,
@@ -134,15 +134,24 @@ _BROWSER_OWNED_CAPABILITY_EVIDENCE: dict[str, str] = {
         "automatic write retry"
     ),
     REASONING_SELECTION: (
-        "PR8.10.1 production live gate: semantic reasoning profiles mapped to the "
-        "proven INSTANT/MEDIUM/HIGH effort slider and were independently proven "
-        "before each conversation write"
+        "PR8.10.1 + PR17.2 production live gates: semantic reasoning profiles mapped "
+        "to proven INSTANT/MEDIUM/HIGH modes and were independently proven before "
+        "each conversation write"
+    ),
+    REASONING_PRESERVATION: (
+        "PR17.2 Phase C live A/B scope gate: existing conversations preserved distinct "
+        "HIGH/MEDIUM state across navigation, A preserved INSTANT after mutation, B "
+        "remained MEDIUM, and both states rehydrated identically in fresh background "
+        "renderers; new-chat surfaces independently hydrated the last-selected INSTANT "
+        "default-like mode"
     ),
     APPROVALS: "production ProductWriteTransport has no approval continuation surface",
     MULTIMODAL_CONTINUATION: "production ProductWriteTransport currently exposes text turns only",
 }
 
-_PROFILE_SELECTION_CAPABILITIES = frozenset({MODEL_SELECTION, REASONING_SELECTION})
+_PROFILE_SELECTION_CAPABILITIES = frozenset(
+    {MODEL_SELECTION, REASONING_SELECTION, REASONING_PRESERVATION}
+)
 
 
 def _build_browser_owned_capabilities(
@@ -157,7 +166,8 @@ def _build_browser_owned_capabilities(
                 name=name,
                 state=(
                     _BROWSER_OWNED_CAPABILITY_STATES[name]
-                    if profile_selection_supported or name not in _PROFILE_SELECTION_CAPABILITIES
+                    if profile_selection_supported
+                    or name not in _PROFILE_SELECTION_CAPABILITIES
                     else CapabilityState.UNKNOWN
                 ),
                 owner=_BROWSER_OWNED_CAPABILITY_OWNERS.get(
@@ -166,7 +176,8 @@ def _build_browser_owned_capabilities(
                 ),
                 evidence=(
                     _BROWSER_OWNED_CAPABILITY_EVIDENCE.get(name)
-                    if profile_selection_supported or name not in _PROFILE_SELECTION_CAPABILITIES
+                    if profile_selection_supported
+                    or name not in _PROFILE_SELECTION_CAPABILITIES
                     else "configured browser-native provider does not expose PR8.10 profile requirements"
                 ),
             )
@@ -204,7 +215,9 @@ def _serialize_submission_operation(method: Any) -> Any:
     """Serialize every browser-owned write/finality operation on one transport."""
 
     @wraps(method)
-    def serialized(self: "BrowserOwnedProductTransport", *args: Any, **kwargs: Any) -> Any:
+    def serialized(
+        self: "BrowserOwnedProductTransport", *args: Any, **kwargs: Any
+    ) -> Any:
         with self._submission_dispatch_lock:
             return method(self, *args, **kwargs)
 
@@ -470,7 +483,9 @@ class BrowserOwnedProductTransport:
         if not isinstance(submission, ProductSubmissionAck):
             raise TypeError("submission must be ProductSubmissionAck")
         if submission.transport != self.transport_id:
-            raise ValueError("submission transport does not match browser-owned transport")
+            raise ValueError(
+                "submission transport does not match browser-owned transport"
+            )
         return self._submission_lifecycle.await_final(submission.submission_id)
 
     def submission_lifecycle_snapshot(self) -> dict[str, Any]:
@@ -570,7 +585,20 @@ class BrowserOwnedProductTransport:
                 "silent_model_profile_fallback": False,
                 "model_profile_strict_prewrite_verification": True,
                 "model_profile_state_scope": "TURN_REQUIREMENT",
-                "model_profile_preservation_scope_proven": False,
+                "model_profile_preservation_scope_proven": (
+                    self._model_profile_selection_supported
+                ),
+                "reasoning_preservation_scope": (
+                    "CONVERSATION_LOCAL_DURABLE"
+                    if self._model_profile_selection_supported
+                    else None
+                ),
+                "reasoning_new_chat_default_behavior": (
+                    "LAST_SELECTED_MODE_OBSERVED"
+                    if self._model_profile_selection_supported
+                    else None
+                ),
+                "reasoning_preservation_is_write_authority": False,
                 "model_profile_automatic_write_retry": False,
                 "streaming_supported": True,
                 "streaming_contract_version": 1,
