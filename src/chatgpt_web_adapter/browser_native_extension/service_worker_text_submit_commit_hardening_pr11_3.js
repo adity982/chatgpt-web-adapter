@@ -49,52 +49,159 @@ async function _pr113WaitForSubmitPoint(debuggee, timeoutMs) {
   return waitForSendButtonPoint(debuggee, timeoutMs);
 }
 
-async function _pr113SubmitTextWithEnterOnce(debuggee) {
-  await _pr113LocateComposerForTextSubmit(debuggee);
-
-  // Enter keyDown is the keyboard protected-write boundary. A rejected/lost CDP
-  // ACK can coexist with a real keyDown, so the attempt itself is ambiguous and
-  // must never look like proof that no write happened.
+async function _pr113DocumentFocusSnapshot(debuggee) {
   try {
-    await sendCommand(debuggee, "Input.dispatchKeyEvent", {
-      type: "keyDown",
-      key: "Enter",
-      code: "Enter",
-      text: "\r",
-      unmodifiedText: "\r",
-      windowsVirtualKeyCode: 13,
-      nativeVirtualKeyCode: 13
+    const result = await sendCommand(debuggee, "Runtime.evaluate", {
+      expression: "(() => ({hasFocus: document.hasFocus()}))()",
+      returnByValue: true,
+      awaitPromise: true
     });
+    return result?.result?.value?.hasFocus === true;
   } catch {
-    throw new Error(PR113_ENTER_KEYDOWN_UNCONFIRMED);
+    return false;
   }
-
-  // Once keyDown is acknowledged, keyUp is cleanup only and must not turn a
-  // possibly committed write into a local failure that callers could interpret
-  // as permission to retry.
-  try {
-    Promise.resolve(sendCommand(debuggee, "Input.dispatchKeyEvent", {
-      type: "keyUp",
-      key: "Enter",
-      code: "Enter",
-      windowsVirtualKeyCode: 13,
-      nativeVirtualKeyCode: 13
-    })).catch(() => {});
-  } catch {}
-
-  return { strategy: "enter_fallback", selector: null };
 }
 
-async function _pr113SubmitTextWithMouseOnce(debuggee, point) {
+async function _pr113EnableBackgroundKeyboardFocus(debuggee) {
+  const tabActive = await _pr113RuntimeTabActive(debuggee);
+  if (tabActive === true) {
+    return {
+      attempted: false,
+      enabled: false,
+      proven: true
+    };
+  }
+
+  await sendCommand(
+    debuggee,
+    "Emulation.setFocusEmulationEnabled",
+    { enabled: true }
+  );
+  const proven = await _pr113DocumentFocusSnapshot(debuggee);
+  if (proven !== true) {
+    try {
+      await sendCommand(
+        debuggee,
+        "Emulation.setFocusEmulationEnabled",
+        { enabled: false }
+      );
+    } catch {}
+    throw new Error("PR11_3_BACKGROUND_FOCUS_EMULATION_NOT_PROVEN");
+  }
+
+  const tabActiveAfter = await _pr113RuntimeTabActive(debuggee);
+  if (tabActiveAfter === true) {
+    try {
+      await sendCommand(
+        debuggee,
+        "Emulation.setFocusEmulationEnabled",
+        { enabled: false }
+      );
+    } catch {}
+    throw new Error("PR11_3_BACKGROUND_FOCUS_EMULATION_ACTIVATED_TAB");
+  }
+
+  return {
+    attempted: true,
+    enabled: true,
+    proven: true
+  };
+}
+
+async function _pr113DisableBackgroundKeyboardFocus(debuggee, state) {
+  if (state?.enabled !== true) return true;
+  try {
+    await sendCommand(
+      debuggee,
+      "Emulation.setFocusEmulationEnabled",
+      { enabled: false }
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function _pr113SubmitTextWithEnterOnce(debuggee) {
+  const focusState = await _pr113EnableBackgroundKeyboardFocus(debuggee);
+  let focusRestored = false;
+  try {
+    await _pr113LocateComposerForTextSubmit(debuggee);
+
+    // Enter keyDown is the keyboard protected-write boundary. A rejected/lost CDP
+    // ACK can coexist with a real keyDown, so the attempt itself is ambiguous and
+    // must never look like proof that no write happened.
+    try {
+      await sendCommand(debuggee, "Input.dispatchKeyEvent", {
+        type: "keyDown",
+        key: "Enter",
+        code: "Enter",
+        text: "\r",
+        unmodifiedText: "\r",
+        windowsVirtualKeyCode: 13,
+        nativeVirtualKeyCode: 13
+      });
+    } catch {
+      throw new Error(PR113_ENTER_KEYDOWN_UNCONFIRMED);
+    }
+
+    // Once keyDown is acknowledged, keyUp is cleanup only and must not turn a
+    // possibly committed write into a local failure that callers could interpret
+    // as permission to retry.
+    try {
+      Promise.resolve(sendCommand(debuggee, "Input.dispatchKeyEvent", {
+        type: "keyUp",
+        key: "Enter",
+        code: "Enter",
+        windowsVirtualKeyCode: 13,
+        nativeVirtualKeyCode: 13
+      })).catch(() => {});
+    } catch {}
+  } finally {
+    focusRestored = await _pr113DisableBackgroundKeyboardFocus(
+      debuggee,
+      focusState
+    );
+  }
+
+  return {
+    strategy: "enter_fallback",
+    selector: null,
+    backgroundFocusEmulationAttempted: focusState?.attempted === true,
+    backgroundFocusEmulationProven: focusState?.proven === true,
+    backgroundFocusEmulationRestored: focusRestored === true
+  };
+}
+
+async function _pr113RuntimeTabActive(debuggee) {
+  const tabId = Number.isInteger(debuggee?.tabId) ? debuggee.tabId : null;
+  if (tabId === null) return null;
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    return tab?.active === true;
+  } catch {
+    return null;
+  }
+}
+
+async function _pr113SubmitTextWithMouseOnce(
+  debuggee,
+  point
+) {
   const x = Number(point?.x);
   const y = Number(point?.y);
   if (!Number.isFinite(x) || !Number.isFinite(y)) {
     throw new Error("CHATGPT_SEND_BUTTON_POINT_INVALID");
   }
 
-  // move/press are pre-commit for the established CWA click contract. If either
-  // fails, Enter remains a single safe fallback because mouseReleased has not
-  // been attempted.
+  // Mouse commit is permitted only when the runtime tab is already active.
+  // Background turns must use the protected Enter boundary instead of changing
+  // the user's active tab.
+  const tabActive = await _pr113RuntimeTabActive(debuggee);
+  if (tabActive !== true) {
+    throw new Error("PR11_3_MOUSE_COMMIT_REQUIRES_ALREADY_ACTIVE_TAB");
+  }
+
   await sendCommand(debuggee, "Input.dispatchMouseEvent", {
     type: "mouseMoved",
     x,
@@ -108,9 +215,6 @@ async function _pr113SubmitTextWithMouseOnce(debuggee, point) {
     clickCount: 1
   });
 
-  // mouseReleased is the click protected-write boundary. Mark the outcome
-  // ambiguous as soon as the command is attempted: a rejected/lost CDP ACK can
-  // coexist with a real page click and therefore can never authorize Enter.
   try {
     await sendCommand(debuggee, "Input.dispatchMouseEvent", {
       type: "mouseReleased",
@@ -123,7 +227,10 @@ async function _pr113SubmitTextWithMouseOnce(debuggee, point) {
     throw new Error(PR113_MOUSE_RELEASE_UNCONFIRMED);
   }
 
-  return { strategy: "send_button_click", selector: point?.selector ?? null };
+  return {
+    strategy: "send_button_click",
+    selector: point?.selector ?? null
+  };
 }
 
 async function _pr113SubmitOfficialTextWithoutPostCommitRetry(
@@ -133,6 +240,11 @@ async function _pr113SubmitOfficialTextWithoutPostCommitRetry(
 ) {
   if (_pr113SpecialSubmitContextActive()) {
     return next(debuggee, timeoutMs);
+  }
+
+  const tabActive = await _pr113RuntimeTabActive(debuggee);
+  if (tabActive !== true) {
+    return _pr113SubmitTextWithEnterOnce(debuggee);
   }
 
   let point = null;

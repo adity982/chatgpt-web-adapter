@@ -286,10 +286,15 @@ function _pr88InstantModeSnapshotExpression() {
     const classify = (value) => {
       const text = normalize(value);
       if (!text) return null;
-      if (text === 'instant' || text === 'мгновенно') return 'INSTANT';
-      if (text === 'medium' || text === 'средний' || text === 'thinking standard') return 'MEDIUM';
-      if (text === 'extra high' || text === 'очень высокий' || text === 'thinking heavy') return 'EXTRA_HIGH';
-      if (text === 'high' || text === 'высокий' || text === 'thinking extended') return 'HIGH';
+      const has = (token) =>
+        text === token ||
+        text.startsWith(token + ' ') ||
+        text.endsWith(' ' + token) ||
+        text.includes(' ' + token + ' ');
+      if (has('instant') || has('мгновенно')) return 'INSTANT';
+      if (has('medium') || has('средний') || text === 'thinking standard') return 'MEDIUM';
+      if (has('extra high') || has('очень высокий') || text === 'thinking heavy') return 'EXTRA_HIGH';
+      if (has('high') || has('высокий') || text === 'thinking extended') return 'HIGH';
       if (text === 'pro standard') return 'PRO_STANDARD';
       if (text === 'pro extended') return 'PRO_EXTENDED';
       if (text === 'thinking') return 'REASONING_OTHER';
@@ -308,8 +313,20 @@ function _pr88InstantModeSnapshotExpression() {
       '[contenteditable="true"][data-lexical-editor="true"]',
       'textarea[placeholder]'
     ];
-    const composer = selectors.map((selector) => document.querySelector(selector)).find(Boolean);
-    if (!composer || !visible(composer)) {
+    let composer = selectors
+      .map((selector) => document.querySelector(selector))
+      .find((element) => element && visible(element));
+    if (!composer) {
+      const semanticCandidates = Array.from(document.querySelectorAll(
+        '[contenteditable="true"][role="textbox"][aria-multiline="true"]'
+      )).filter((candidate) =>
+        visible(candidate) &&
+        candidate.closest('main') &&
+        candidate.closest('form')
+      );
+      composer = semanticCandidates.length === 1 ? semanticCandidates[0] : null;
+    }
+    if (!composer) {
       return { composerReady: false, selectedMode: null, selectedModeProven: false, candidateCount: 0, proofKind: 'composer_missing' };
     }
     const composerRect = composer.getBoundingClientRect();

@@ -1,6 +1,6 @@
 # Project Status
 
-_Last updated: 2026-09-26_
+_Last updated: 2026-09-27_
 
 This is the compact current-state view for `chatgpt-web-adapter` (CWA).
 
@@ -16,7 +16,7 @@ release date            2026-09-01
 package version         0.3.0
 current main            post-0.3 development
 architecture            PR15 provider architecture frozen
-current phase           PR16.3 adoption/discoverability foundation
+current phase           PR16.5 Gemini Notebook Audio Overview capability closure
 license                 MIT
 python                  3.10-3.14
 ```
@@ -36,6 +36,7 @@ ChatGPT               PRODUCTION / default conversational runtime
 DeepSeek Web          EXPERIMENTAL conversational runtime
 Gemini Web            EXPERIMENTAL conversational runtime
 Google Translate Web  EXPERIMENTAL non-chat translate_text capability
+Gemini Notebook Web    EXPERIMENTAL add_url_source + background Audio Overview lifecycle
 ```
 
 The shared provider-neutral architecture is represented by
@@ -236,6 +237,24 @@ New discovery surfaces include `docs/quickstart.md`, `docs/capabilities.md`,
 
 A dedicated MCP adapter remains a future integration layer, not a current support
 claim.
+
+## Active product experiment
+
+PR16.4 asks whether the lower CWA browser bridge can support a persistent consumer
+research workspace without forcing it into the chat-provider contract.
+
+Target:
+
+```text
+existing owned consumer Gemini Notebook
++ exact web URL source
+→ durable source admission
+```
+
+PR16.4 has live-proven one bounded Gemini Notebook URL-source admission path. The
+capability is module-only and experimental; no Gemini Notebook
+capability is claimed on `main` until product identity, commitment boundary and
+admission finality are live-proven.
 
 ## Release policy
 

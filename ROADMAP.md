@@ -205,6 +205,51 @@ Goals:
 This slice deliberately does **not** add MCP, a generic hosted-capability registry,
 or a second non-chat product.
 
+### PR16.4 — Gemini Notebook persistent-workspace proof
+
+Closed bounded capability proof.
+
+Question:
+
+```text
+can CWA support a persistent consumer research workspace
+without turning it into chat semantics?
+```
+
+First intended operation:
+
+```text
+existing owned consumer notebook
++ exact web URL source
+→ durable source admission
+```
+
+The experiment established the real notebook route, Sources-panel structure, durable
+source-row identity, commitment boundary, and page-DOM admission finality. One
+fully CWA-owned live URL-source admission passed with post-commit reconciliation.
+
+Gemini Notebook Enterprise already exposes preview notebook/source APIs. This CWA
+experiment is explicitly about ordinary consumer-product semantics, not API
+replacement.
+
+Public module-only surface:
+
+```python
+GeminiNotebookWebCapability.add_url_source(
+    notebook=...,
+    source_url=...,
+)
+```
+
+Finality remains noncanonical and product-local:
+
+```text
+PAGE_DOM_DURABLE_SOURCE_ADMISSION
+automatic retry = false
+```
+
+No shared hosted-capability abstraction is introduced by default.
+
 ## Current direction after PR16
 
 After the documentation/discovery surface catches up, stop architecture-driven expansion.

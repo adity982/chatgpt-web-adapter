@@ -11,6 +11,7 @@ from .artifact_manifest import (
     EXPORT_CONTRACT,
     artifact_file_entry,
     build_artifact_manifest,
+    open_artifact_text,
     write_artifact_manifest,
 )
 from .types import ChatConversation, ChatMessage, ConversationRef
@@ -113,7 +114,12 @@ def _reserve_export_bundle(
         export_path = directory / f"{name}_chat_export_{index}.{extension}"
         manifest_path = directory / f"{name}_chat_export_{index}.manifest.json"
         try:
-            export_file = export_path.open("x", encoding="utf-8", newline="\n")
+            export_file = open_artifact_text(
+                export_path,
+                exclusive=True,
+                encoding="utf-8",
+                newline="\n",
+            )
         except FileExistsError:
             if not automatic:
                 raise FileExistsError(

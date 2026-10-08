@@ -11,6 +11,7 @@ from .artifact_manifest import (
     SNAPSHOT_CONTRACT,
     artifact_file_entry,
     build_artifact_manifest,
+    open_artifact_text,
     write_artifact_manifest,
 )
 from .canonical_conversation_snapshot import CanonicalConversationSnapshot
@@ -88,7 +89,12 @@ def _reserve_snapshot_bundle(
         )
         manifest_path = directory / f"{name}_chat_snapshot_{index}.manifest.json"
         try:
-            context_file = context_path.open("x", encoding="utf-8", newline="\n")
+            context_file = open_artifact_text(
+                context_path,
+                exclusive=True,
+                encoding="utf-8",
+                newline="\n",
+            )
         except FileExistsError:
             if not automatic:
                 raise FileExistsError(
@@ -253,7 +259,12 @@ def snapshot_conversation(
         context_file.write(context_text)
         context_file.close()
         if raw_payload_path is not None and raw_text is not None:
-            with raw_payload_path.open("x", encoding="utf-8", newline="\n") as raw_file:
+            with open_artifact_text(
+                raw_payload_path,
+                exclusive=True,
+                encoding="utf-8",
+                newline="\n",
+            ) as raw_file:
                 raw_payload_created = True
                 raw_file.write(raw_text)
 
