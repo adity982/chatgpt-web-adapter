@@ -10,6 +10,8 @@ from types import SimpleNamespace
 import pytest
 
 import chatgpt_web_adapter.cli_v02 as cli
+import chatgpt_web_adapter.conversation_snapshot as conversation_snapshot_module
+import chatgpt_web_adapter.export as export_module
 from chatgpt_web_adapter.artifact_manifest import (
     ARTIFACT_MANIFEST_SCHEMA,
     ArtifactFileEntry,
@@ -38,16 +40,6 @@ class _ArtifactClient:
     def _get_conversation_payload(self, conversation_id: str):
         self.payload_calls.append(conversation_id)
         return dict(self.raw_payload)
-
-
-class _BarrierArtifactClient(_ArtifactClient):
-    def __init__(self, messages: list[ChatMessage]) -> None:
-        super().__init__(messages)
-        self.barrier = threading.Barrier(2)
-
-    def get_messages(self, conversation, **kwargs):
-        self.barrier.wait(timeout=5)
-        return super().get_messages(conversation, **kwargs)
 
 
 def _manifest(path: Path) -> dict:
@@ -179,17 +171,21 @@ def test_concurrent_snapshots_contend_for_the_same_index(
     monkeypatch, tmp_path: Path
 ) -> None:
     client = _ArtifactClient([ChatMessage(role="user", text="Hello")])
-    original_open = Path.open
+    original_open = conversation_snapshot_module.open_artifact_text
     reservation_barrier = threading.Barrier(2)
     attempted_indexes: list[int] = []
 
-    def coordinated_open(path: Path, mode: str = "r", *args, **kwargs):
-        if mode == "x" and path.name == "project_chat_context_1.md":
+    def coordinated_open(path: Path, *args, **kwargs):
+        if kwargs.get("exclusive") and path.name == "project_chat_context_1.md":
             attempted_indexes.append(1)
             reservation_barrier.wait(timeout=5)
-        return original_open(path, mode, *args, **kwargs)
+        return original_open(path, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "open", coordinated_open)
+    monkeypatch.setattr(
+        conversation_snapshot_module,
+        "open_artifact_text",
+        coordinated_open,
+    )
 
     def create_snapshot():
         return snapshot_conversation(
@@ -314,8 +310,21 @@ def test_export_manifest_collision_fails_before_canonical_read(tmp_path: Path) -
     assert client.message_calls == []
 
 
-def test_concurrent_exports_atomically_claim_distinct_indexes(tmp_path: Path) -> None:
-    client = _BarrierArtifactClient([ChatMessage(role="user", text="Hello")])
+def test_concurrent_exports_contend_for_the_same_index(
+    monkeypatch, tmp_path: Path
+) -> None:
+    client = _ArtifactClient([ChatMessage(role="user", text="Hello")])
+    original_open = export_module.open_artifact_text
+    reservation_barrier = threading.Barrier(2)
+    attempted_indexes: list[int] = []
+
+    def coordinated_open(path: Path, *args, **kwargs):
+        if kwargs.get("exclusive") and path.name == "project_chat_export_1.jsonl":
+            attempted_indexes.append(1)
+            reservation_barrier.wait(timeout=5)
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(export_module, "open_artifact_text", coordinated_open)
 
     def create_export():
         return write_conversation_export(
@@ -329,6 +338,7 @@ def test_concurrent_exports_atomically_claim_distinct_indexes(tmp_path: Path) ->
     with ThreadPoolExecutor(max_workers=2) as executor:
         results = list(executor.map(lambda _: create_export(), range(2)))
 
+    assert attempted_indexes == [1, 1]
     assert {result.index for result in results} == {1, 2}
     for result in results:
         manifest = _manifest(result.manifest_path)
